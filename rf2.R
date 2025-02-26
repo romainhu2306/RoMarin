@@ -17,8 +17,8 @@ range(Data0$Date)
 Data0$Time <- as.numeric(Data0$Date)
 Data1$Time <- as.numeric(Data1$Date)
 
-sel_a <- which(Data0$Year<=2021)
-sel_b <- which(Data0$Year>2021)
+sel_a <- which(Data0$Year <= 2021)
+sel_b <- which(Data0$Year > 2021)
 
 nb_block <- 10
 borne_block <- seq(1, nrow(Data0), length = nb_lock + 1) %>% floor
@@ -42,10 +42,10 @@ equation <- Load~  Time + toy + Temp + Load.1 + Load.7 + Temp_s99 + WeekDays + B
 rf <- ranger(equation, data=Data0[sel_a,], importance =  'permutation', num.trees = 1000, sample.fraction=0.1)
 rf$r.squared
 
-rf.forecast<-predict(rf,  data= Data0[sel_b,])$prediction
-rmse1.forecast <- rmse.old(Data0$Load[sel_b]-rf.forecast)
+rf.forecast <- predict(rf,  data = Data0[sel_b,])$prediction
+rmse1.forecast <- rmse.old(Data0$Load[sel_b] - rf.forecast)
 rmse1.forecast
-  
+
 #############importance plot
 imp <- rf$variable.importance
 sort(imp)
@@ -56,7 +56,7 @@ K <- length(imp)
 text(tail(c(1:length(imp)), K), tail(imp[o]+max(imp/8), K), labels= tail(nom[o], K), pos=3, srt=90, adj=1)
 points(c(1:length(imp)), imp[o], pch=20)
 
-rf$prediction.error%>%sqrt
+rf$prediction.error %>% sqrt
 
 #####influence des paramètres
 ####nTree
@@ -65,108 +65,108 @@ rmse.forecast <- list()
 rmse.oob <- list()
 
 #ntree
-ntest<-seq(1,2000,by=100)
-rfTest<-lapply(ntest, function(n){ranger(equation, num.trees = n, data=Data0[sel_a,], mtry=1, max.depth = 10)})
-rfTest.fitted<-lapply(rfTest, predict, data=Data0[sel_a,])
-rfTest.forecast<-lapply(rfTest, predict, data=Data0[sel_b,])
+ntest <- seq(1, 2000, by = 100)
+rfTest <- lapply(ntest, function(n){ranger(equation, num.trees = n, data=Data0[sel_a,], mtry=1, max.depth = 10)})
+rfTest.fitted <- lapply(rfTest, predict, data=Data0[sel_a,])
+rfTest.forecast <- lapply(rfTest, predict, data=Data0[sel_b,])
 
-rmse.fitted$ntree<-lapply(rfTest.fitted, function(x){sqrt(mean((Data0[sel_a,]$Load-x$prediction)^2))})%>%unlist()
-rmse.forecast$ntree<-lapply(rfTest.forecast, function(x){sqrt(mean((Data0[sel_b,]$Load-x$prediction)^2))})%>%unlist()
-rmse.oob$ntree <-  lapply(rfTest, function(x){sqrt(x$prediction.error) %>% tail(, n=1) })%>%unlist()
+rmse.fitted$ntree <- lapply(rfTest.fitted, function(x){sqrt(mean((Data0[sel_a,]$Load-x$prediction)^2))})%>%unlist()
+rmse.forecast$ntree <- lapply(rfTest.forecast, function(x){sqrt(mean((Data0[sel_b,]$Load-x$prediction)^2))})%>%unlist()
+rmse.oob$ntree <- lapply(rfTest, function(x){sqrt(x$prediction.error) %>% tail(, n=1) })%>%unlist()
 
-par(mfrow=c(1,1))
+par(mfrow=c(1, 1))
 plot(ntest, rmse.fitted$ntree,type='l', col='royalblue2', ylim=range(rmse.fitted,rmse.forecast))
 lines(ntest, rmse.forecast$ntree, col='orangered2')
 lines(ntest, rmse.oob$ntree, col='dark green')
 
 
 #mtry
-mtry<-seq(1,10,by=1)
-rfTest<-lapply(mtry, function(m){ranger(equation, mtry = m, data=Data0[sel_a,], num.trees=100)})
-rfTest.fitted<-lapply(rfTest, predict, data=Data0[sel_a,])
-rfTest.forecast<-lapply(rfTest, predict, data=Data0[sel_b,])
-rmse.fitted$mtry<-lapply(rfTest.fitted, function(x){sqrt(mean((Data0[sel_a,]$Load-x$prediction)^2))})%>%unlist()
-rmse.forecast$mtry<-lapply(rfTest.forecast, function(x){sqrt(mean((Data0[sel_b,]$Load-x$prediction)^2))})%>%unlist()
-rmse.oob$mtry <-  lapply(rfTest, function(x){sqrt(x$prediction.error) %>% tail(, n=1) })%>%unlist()
+mtry <- seq(1, 10, by = 1)
+rfTest <- lapply(mtry, function(m){ranger(equation, mtry = m, data=Data0[sel_a,], num.trees=100)})
+rfTest.fitted <- lapply(rfTest, predict, data=Data0[sel_a,])
+rfTest.forecast <- lapply(rfTest, predict, data=Data0[sel_b,])
+rmse.fitted$mtry <- lapply(rfTest.fitted, function(x){sqrt(mean((Data0[sel_a,]$Load-x$prediction)^2))})%>%unlist()
+rmse.forecast$mtry <- lapply(rfTest.forecast, function(x){sqrt(mean((Data0[sel_b,]$Load-x$prediction)^2))})%>%unlist()
+rmse.oob$mtry <- lapply(rfTest, function(x){sqrt(x$prediction.error) %>% tail(, n=1) })%>%unlist()
 
-par(mfrow=c(1,1))
+par(mfrow=c(1, 1))
 plot(mtry, rmse.fitted$mtry,type='l', col='royalblue2', ylim=range(rmse.fitted,rmse.forecast))
 lines(mtry, rmse.forecast$mtry, col='orangered2')
 lines(mtry, rmse.oob$mtry, col='dark green')
-abline(v=sqrt(16))
+abline(v = sqrt(16))
 
 
-###################################################################################################################
+################################################################################
 #############################################quantile RF
-###################################################################################################################
-qrf<- ranger::ranger(equation, data = Data0[sel_a,], importance =  'permutation', seed=1, quantreg=TRUE)
+################################################################################
+qrf <- ranger::ranger(equation, data = Data0[sel_a,], importance =  'permutation', seed=1, quantreg=TRUE)
 quant=0.8
 qrf.forecast <- predict(qrf, data=Data0[sel_b,], quantiles =quant, type = "quantiles")$predictions
 pinball_loss(Data0[sel_b,]$Load, qrf.forecast,quant) 
 
 plot(Data0[sel_b,]$Load, type='l')
 lines(qrf.forecast, col='blue')
-###################################################################################################################
+################################################################################
 #############################################GAM/RF
-###################################################################################################################
+################################################################################
 
 ####estimation of block CV residuals
 
 
 blockRMSE<-function(equation, block, data)
 {
-  g<- gam(as.formula(equation), data=data[-block,])
-  forecast<-predict(g, newdata=data[block,])
-  return(data[block,]$Load-forecast)
+  g <- gam(as.formula(equation), data = data[-block, ])
+  forecast <- predict(g, newdata = data[block, ])
+  return(data[block, ]$Load - forecast)
 } 
 
 
-Nblock<-10
-borne_block<-seq(1, nrow(Data0[sel_a,]), length=Nblock+1)%>%floor
-block_list<-list()
-l<-length(borne_block)
-for(i in c(2:(l-1)))
-{
-  block_list[[i-1]] <- c(borne_block[i-1]:(borne_block[i]-1))
+Nblock <- 10
+borne_block <- seq(1, nrow(Data0[sel_a, ]), length = Nblock + 1) %>% floor
+block_list <- list()
+l <- length(borne_block)
+for(i in c(2:(l - 1))){
+  block_list[[i - 1]] <- c(borne_block[i - 1]:(borne_block[i] - 1))
 }
-block_list[[l-1]]<-c(borne_block[l-1]:(borne_block[l]))
+block_list[[l - 1]] <- c(borne_block[l - 1]:(borne_block[l]))
 
 
 
-equation <- Load~s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Load.1, bs='cr')+ s(Load.7, bs='cr') +
+equation <- Load ~ s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Load.1, bs='cr')+ s(Load.7, bs='cr') +
   s(Temp_s99,k=10, bs='cr') + as.factor(WeekDays) +BH
-Block_residuals<-lapply(block_list, blockRMSE, equation=equation, data=Data0[sel_a,])%>%unlist
+Block_residuals <- lapply(block_list, blockRMSE, equation=equation, data=Data0[sel_a,])%>%unlist
 length(Block_residuals)
 
-plot(Block_residuals, type='l')
+plot(Block_residuals, type = "l")
 
 ####estimation of GAM, GAM effects
 g <- gam(equation, data = Data0[sel_a,])
-g.forecast <- predict(g, newdata=Data0)
-terms0 <- predict(g, newdata=Data0, type='terms')
+g.forecast <- predict(g, newdata = Data0)
+terms0 <- predict(g, newdata = Data0, type = 'terms')
 colnames(terms0) <- paste0("gterms_", c(1:ncol(terms0)))
 
-plot(terms0[,5], type='l')
+plot(terms0[, 5], type = "l")
 
 
-residuals <- c(Block_residuals, Data0[sel_b,]$Load-g.forecast[sel_b])
+residuals <- c(Block_residuals, Data0[sel_b, ]$Load - g.forecast[sel_b])
 Data0_rf <- data.frame(Data0, terms0)
 Data0_rf$res <- residuals
-Data0_rf$res.48 <- c(residuals[1], residuals[1:(length(residuals)-1)])
-Data0_rf$res.336 <- c(residuals[1:7], residuals[1:(length(residuals)-7)])
+Data0_rf$res.48 <- c(residuals[1], residuals[1:(length(residuals) - 1)])
+Data0_rf$res.336 <- c(residuals[1:7], residuals[1:(length(residuals) - 7)])
 
 
 cov <- "Time + toy + Temp + Load.1 + Load.7 + Temp_s99 + WeekDays + BH + Temp_s95_max + Temp_s99_max + Summer_break  + Christmas_break + 
   Temp_s95_min +Temp_s99_min + DLS  + "
-gterm <-paste0("gterms_", c(1:ncol(terms0)))
-gterm <- paste0(gterm, collapse='+')
+gterm <- paste0("gterms_", c(1:ncol(terms0)))
+gterm <- paste0(gterm, collapse = '+')
 cov <- paste0(cov, gterm, collapse = '+')
 formule_rf <- paste0("res", "~", cov)
 
-rf_gam<- ranger::ranger(formule_rf, data = Data0_rf[sel_a,], importance =  'permutation')
+rf_gam <- ranger::ranger(formule_rf, data = Data0_rf[sel_a,],
+                         importance =  'permutation')
 rf_gam$r.squared
 
-rf_gam.forecast <- predict(rf_gam, data = Data0_rf)$predictions+ g.forecast
+rf_gam.forecast <- predict(rf_gam, data = Data0_rf)$predictions + g.forecast
 rmse(Data0$Load[sel_a],rf_gam.forecast[sel_a])
 rmse(Data0$Load[sel_b],rf_gam.forecast[sel_b])
 
