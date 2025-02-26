@@ -1,0 +1,113 @@
+---
+title: "mod_pred_TP1"
+output: html_document
+date: "2025-01-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=objects())
+
+library(mgcv)
+library(yarrr)
+library(magrittr)
+library(qgam)
+library(forecast)
+library(tidyverse)
+library(lubridate)
+library(randomForest)
+source('score.R')
+
+Data0 = read_delim("mod_pred_train.csv", delim = ",")
+Data1 = read_delim("mod_pred_test.csv", delim = ",")
+
+Data0$Time = as.numeric(Data0$Date)
+Data1$Time = as.numeric(Data1$Date)
+```
+
+```{r}
+Data0$Time = as.numeric(Data0$Date)
+Data1$Time = as.numeric(Data1$Date)
+
+Data0$WeekDays = as.factor(Data0$WeekDays)
+Data1$WeekDays = as.factor(Data1$WeekDays)
+
+Data0$BH = as.factor(Data0$BH)
+Data1$BH = as.factor(Data1$BH)
+
+Data0$Month = as.factor(Data0$Month)
+Data1$Month = as.factor(Data1$Month)
+
+Data0$Holiday_zone_a = as.factor(Data0$Holiday_zone_a)
+Data1$Holiday_zone_a = as.factor(Data1$Holiday_zone_a)
+
+Data0$Holiday_zone_b = as.factor(Data0$Holiday_zone_b)
+Data1$Holiday_zone_b = as.factor(Data1$Holiday_zone_b)
+
+Data0$Holiday_zone_c = as.factor(Data0$Holiday_zone_c)
+Data1$Holiday_zone_c = as.factor(Data1$Holiday_zone_c)
+
+Data0$DLS = as.factor(Data0$DLS)
+Data1$DLS = as.factor(Data1$DLS)
+
+Data0$BH_after = as.factor(Data0$BH_after)
+Data1$BH_after = as.factor(Data1$BH_after)
+
+start = as.Date("2020-03-17")
+end = as.Date("2020-12-15")
+Data0$covid = as.factor(ifelse(Data0$Date <= start & Data0$Date >= end, 1, 0))
+Data1$covid = as.factor(ifelse(Data1$Date <= start & Data1$Date >= end, 1, 0))
+
+range(Data0$Date)
+Data1
+```
+
+```{r}
+# Creating train and test sets.
+sel_a = which(Data0$Year <= 2021)
+sel_b = which(Data0$Year > 2021)
+```
+
+```{r}
+equation <- Net_demand~s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + 
+  s(Load.1, bs='cr', by= as.factor(WeekDays))+ s(Load.7, bs='cr')  + as.factor(WeekDays) + BH
+equation_var <- ~  s(Temp,k=10, bs='cr') + s(Load.1)
+gqgam <- qgam(equation, data=Data0[sel_a,], qu=0.95)
+
+gqgam.forecast <- predict(gqgam, newdata=Data0[sel_b,])
+pinball_loss(y=Data0$Net_demand[sel_b], gqgam.forecast, quant=0.95, output.vect=FALSE)
+
+plot(Data0$Load[sel_b], type='l')
+lines(gqgam.forecast, col='red')
+```
+
+```{r}
+gqgam95 <- qgam(equation, data=Data0[sel_a,], qu=0.95)
+y <- Data0$Net_demand
+X <-  predict(gqgam95, newdata=Data0, type='terms')
+###scaling columns
+for (j in 1:ncol(X))
+  X[,j] <- (X[,j]-mean(X[,j])) / sd(X[,j])
+X <- cbind(X,1)
+d <- ncol(X)
+```
+
+```{r}
+ssm_q <- viking::statespace(X, y)
+ssm_dyn_q <- viking::select_Kalman_variances(ssm_q, X[sel_a,], y[sel_a], method = 'em', n_iter = 1000,
+                                          Q_init = diag(d), verbose = 200, mode_diag = T)
+
+ssm_dyn_q <- predict(ssm_dyn_q, X, y, type='model', compute_smooth = TRUE)
+gqgam.kalman.Dyn <- ssm_dyn_q$pred_mean%>%tail(length(sel_b))
+rmse(y=Data0$Load[sel_b], ychap=gqgam.kalman.Dyn)
+
+res <- Data0$Net_demand[sel_a] - ssm_dyn_q$pred_mean%>%head(length(sel_a))
+quant <- qnorm(0.95, mean= mean(res), sd= sd(res))
+pinball_loss(y=Data0$Net_demand[sel_b], gqgam.kalman.Dyn+quant, quant=0.95, output.vect=FALSE)
+```
+
+```{r}
+submit = data.frame(Id = 1:length(pred_final), Net_demand = pred_final)
+write.table(submit, file = "pred.csv", quote = F, sep = ",",
+            dec = '.', row.names = F)
+```
