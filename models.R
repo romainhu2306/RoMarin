@@ -42,10 +42,12 @@ qgam_pred <- predict(qgam, newdata = data0, type = "terms")
 xgb_pred <- predict(xgb_model, newdata = as.matrix(data0[, -1]), type = "terms")
 kalman_input <- qgam_pred + xgb_pred
 kalman_target <- data0$Net_demand
+
 for (j in seq_len(ncol(kalman_input))){
   kalman_input[, j] <- (kalman_input[, j] - mean(kalman_input[, j])) /
     sd(kalman_input[, j])
 }
+
 kalman_input <- cbind(kalman_input, 1)
 input_dim <- ncol(kalman_input)
 ssm <- statespace(kalman_input, kalman_target)
