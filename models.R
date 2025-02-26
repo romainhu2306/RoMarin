@@ -50,11 +50,13 @@ for (j in seq_len(ncol(kalman_input))){
 
 kalman_input <- cbind(kalman_input, 1)
 input_dim <- ncol(kalman_input)
+
 ssm <- statespace(kalman_input, kalman_target)
 ssm_em <- select_Kalman_variances(ssm, kalman_input[sel_a, ], kalman_target,
                                   method = "em", n_iter = 1000,
                                   Q_init = diag(input_dim), verbose = 10,
                                   mode_diag = TRUE)
+
 saveRDS(ssm_em, "Results/ssm_em.RDS")
 ssm_em <- readRDS("Results/ssm_em.RDS")
 kalman_pred <- predict(ssm_em, kalman_input, kalman_target)
