@@ -7,30 +7,30 @@ library(forecast)
 library(tidyverse)
 source('score.R')
 
-Data0 = read_delim("data/Data0.csv", delim = ",")
-Data1 = read_delim("data/Data1.csv", delim = ",")
+Data0 <- read_delim("data/Data0.csv", delim = ",")
+Data1 <- read_delim("data/Data1.csv", delim = ",")
 
 range(Data1$Date)
 range(Data0$Date)
 
-Data0$Time = as.numeric(Data0$Date)
-Data1$Time = as.numeric(Data1$Date)
+Data0$Time <- as.numeric(Data0$Date)
+Data1$Time <- as.numeric(Data1$Date)
 
-sel_a = which(Data0$Year<=2021)
-sel_b = which(Data0$Year>2021)
+sel_a <- which(Data0$Year<=2021)
+sel_b <- which(Data0$Year>2021)
 
-Nblock = 10
-borne_block = seq(1, nrow(Data0), length = Nblock + 1) %>% floor
-block_list = list()
-l = length(borne_block)
-for(i in c(2:(l-1))){
-  block_list[[i-1]] = c(borne_block[i-1]:(borne_block[i]-1))
+nb_block <- 10
+borne_block <- seq(1, nrow(Data0), length = nb_lock + 1) %>% floor
+block_list <- list()
+l <- length(borne_block)
+for(i in c(2:(l - 1))){
+  block_list[[i - 1]] <- c(borne_block[i - 1]:(borne_block[i] - 1))
 }
-block_list[[l-1]] = c(borne_block[l-1]:(borne_block[l]))
+block_list[[l - 1]] <- c(borne_block[l - 1]:(borne_block[l]))
 
-blockRMSE = function(equation, block){
-  g = gam(as.formula(equation), data = Data0[-block,])
-  forecast = predict(g, newdata = Data0[block,])
+blockRMSE <- function(equation, block) {
+  g <- gam(as.formula(equation), data = Data0[-block, ])
+  forecast <- predict(g, newdata = Data0[block, ])
   return(forecast)
 }
 
