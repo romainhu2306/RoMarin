@@ -8,7 +8,9 @@ library(tidyverse)
 library(qgam)
 library(xgboost)
 library(viking)
+
 source("score.R")
+source("train_functions.R")
 
 data0 <- read_delim("data/Data0.csv", delim = ",")
 data1 <- read_delim("data/Data1.csv", delim = ",")
@@ -21,21 +23,27 @@ sel_b <- which(data0$Year > 2021)
 train <- data0[sel_a, ]
 test <- data0[sel_b, ]
 
-# qgam model.
 qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
   s(Load.1, bs = "cr", by =  as.factor(WeekDays)) +
   s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
   s(Net_demand.1, bs = "cr") + s(Net_demand.7, bs = "cr")
 
-qgam <- qgam(qgam_eq, data = train, qu = .8)
+pred_90 <- qgam_boost(train, test, .9, qgam_eq)
+pred_80 <- qgam_boost(train, test, .8, qgam_eq)
+pred_70 <- qgam_boost(train, test, .7, qgam_eq)
+pred_60 <- qgam_boost(train, test, .6, qgam_eq)
 
-# Boosting : xgboost is trained on the residuals from qgam.
-qgam_pred <- predict(qgam, type = "terms")
-qgam_res <- train$Net_demand - qgam_pred
-dtrain <- xgb.DMatrix(data = as.matrix(train[, -1]), label = qgam_res)
-xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
-xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 100)
+aggregation <- tibble(Net_demand = train$Net_demand, pred_90[sel_a, ], pred_80[sel_a, ],
+                      pred_70[sel_a, ], pred_60[sel_a, ])
+aggreg_pred <- aggreg_qgam(aggregation)
+
+final_pred <- kalman_filter(aggreg_pred, data0$Net_demand)
+
+
+
+
+
 
 # Online learning : apply kalman filtering to the boosted prediction.
 qgam_pred <- predict(qgam, newdata = data0, type = "terms")
@@ -62,5 +70,4 @@ ssm_em <- readRDS("Results/ssm_em.RDS")
 kalman_pred <- predict(ssm_em, kalman_input, kalman_target)
 final_pred <- kalman_pred %>% tail(length(sel_b))
 
-pinball_loss(data0$Net_demand[sel_b], final_pred, quant = .8,
-             output.vect = FALSE)
+pinball_loss(data0$Net_demand, pred_90, quant = .9, output.vect = FALSE)
