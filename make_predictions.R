@@ -8,9 +8,7 @@ library(tidyverse)
 library(qgam)
 library(xgboost)
 library(viking)
-
 source("score.R")
-source("train_functions.R")
 
 data0 <- read_delim("data/Data0.csv", delim = ",")
 data1 <- read_delim("data/Data1.csv", delim = ",")
@@ -29,45 +27,81 @@ qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
   s(Net_demand.1, bs = "cr") + s(Net_demand.7, bs = "cr")
 
-pred_90 <- qgam_boost(train, test, .9, qgam_eq)
-pred_80 <- qgam_boost(train, test, .8, qgam_eq)
-pred_70 <- qgam_boost(train, test, .7, qgam_eq)
-pred_60 <- qgam_boost(train, test, .6, qgam_eq)
+qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
+  # Separate train sets for qgam and xgb.
+  full_data <- rbind(train, test)
+  nrow_train <- nrow(train)
+  idx <- sample(nrow_train, .5 * nrow_train)
+  train_qgam <- train[idx, ]
+  train_xgb <- train[-idx, ]
 
-aggregation <- tibble(Net_demand = train$Net_demand, pred_90[sel_a, ], pred_80[sel_a, ],
-                      pred_70[sel_a, ], pred_60[sel_a, ])
-aggreg_pred <- aggreg_qgam(aggregation)
+  # Train qgam model.
+  qgam_model <- qgam(qgam_eq, data = train_qgam, qu = quantile)
 
-final_pred <- kalman_filter(aggreg_pred, data0$Net_demand)
+  # Boost qgam model with xgboost.
+  qgam_train_pred <- predict(qgam_model, newdata = train_xgb)
+  qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
+  dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -1]),
+                        label = qgam_train_res)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 100)
 
-
-
-
-
-
-# Online learning : apply kalman filtering to the boosted prediction.
-qgam_pred <- predict(qgam, newdata = data0, type = "terms")
-xgb_pred <- predict(xgb_model, newdata = as.matrix(data0[, -1]), type = "terms")
-kalman_input <- qgam_pred + xgb_pred
-kalman_target <- data0$Net_demand
-
-for (j in seq_len(ncol(kalman_input))){
-  kalman_input[, j] <- (kalman_input[, j] - mean(kalman_input[, j])) /
-    sd(kalman_input[, j])
+  # Kalman filtering with expectation maximization on final prediction.
+  qgam_pred <- predict(qgam_model, newdata = full_data, type = "terms")
+  xgb_pred <- predict(xgb_model, newdata = as.matrix(full_data[, -1]))
+  input <- cbind(qgam_pred, xgb_pred) %>% scale %>% cbind(1)
+  target <- full_data$Net_demand
+  ssm <- statespace(input, target)
+  ssm_em <- select_Kalman_variances(ssm, input[seq_len(nrow_train), ],
+                                    target[seq_len(nrow_train)],
+                                    Q_init = diag(ncol(input)), method = "em",
+                                    n_iter = 1000, verbose = 100)
+  predict(ssm_em, input, target, type = "model", compute_smooth = TRUE)
 }
 
-kalman_input <- cbind(kalman_input, 1)
-input_dim <- ncol(kalman_input)
+qgam_80 <- qgam_xgb_kf(train, test, qgam_eq, .8)
 
-ssm <- statespace(kalman_input, kalman_target)
-ssm_em <- select_Kalman_variances(ssm, kalman_input[sel_a, ], kalman_target,
-                                  method = "em", n_iter = 1000,
-                                  Q_init = diag(input_dim), verbose = 10,
-                                  mode_diag = TRUE)
+idx <- sample(nrow(train), .5 * nrow(train))
+train_qgam <- train[idx, ]
+train_xgb <- train[-idx, ]
 
+qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
+  s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
+  s(Load.1, bs = "cr", by =  as.factor(WeekDays)) +
+  s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
+  s(Net_demand.1, bs = "cr") + s(Net_demand.7, bs = "cr")
+
+qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
+
+qgam_train_pred <- predict(qgam_model, newdata = train_xgb)
+qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
+dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -1]), label = qgam_train_res)
+xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
+xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 100)
+
+qgam_pred <- predict(qgam_model, newdata = data0)
+qgam_terms <- predict(qgam_model, newdata = data0, type = "terms")
+xgb_pred <- predict(xgb_model, newdata = as.matrix(data0[, -1]))
+boosted_pred <- qgam_pred + xgb_pred
+input <- cbind(qgam_terms, boosted_pred) %>% scale %>% cbind(1)
+target <- data0$Net_demand
+
+ssm <- statespace(input, target)
+ssm_em <- select_Kalman_variances(ssm, input[sel_a, ], target[sel_a],
+                                  Q_init = diag(ncol(input)), method = "em",
+                                  n_iter = 1000, verbose = 100)
 saveRDS(ssm_em, "Results/ssm_em.RDS")
-ssm_em <- readRDS("Results/ssm_em.RDS")
-kalman_pred <- predict(ssm_em, kalman_input, kalman_target)
-final_pred <- kalman_pred %>% tail(length(sel_b))
 
-pinball_loss(data0$Net_demand, pred_90, quant = .9, output.vect = FALSE)
+ssm_em <- readRDS("Results/ssm_em.RDS")
+ssm_em_pred <- predict(ssm_em, input, target, type = "model",
+                       compute_smooth = TRUE)
+final_pred <- tail(ssm_em_pred$pred_mean, nrow(test))
+
+pinball_loss(test$Net_demand, qgam_80, quant = .8, output.vect = FALSE)
+rmse(test$Net_demand, final_pred)
+
+plot(test$Net_demand, type = "l")
+lines(final_pred, col = "red")
+
+final_res <- test$Net_demand - final_pred
+acf(final_res)

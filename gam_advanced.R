@@ -356,14 +356,14 @@ equation <- Load ~ s(as.numeric(Date), k = 3, bs = "cr") +
 equation_var <- ~ s(Temp, k = 10, bs = 'cr') + s(Load.1)
 gqgam <- qgam(list(equation, equation_var), data = Data0[sel_a,],
               discrete = TRUE, qu=0.95)
-gqgam <- qgam(equation, data = Data0[sel_a, ], qu = 0.95)
+gqgam <- qgam(equation, data = Data0[sel_a, ], qu = 0.8)
 
 gqgam.forecast <- predict(gqgam, newdata = Data0[sel_b, ])
-pinball_loss(y = Data0$Load[sel_b], gqgam.forecast, quant = 0.95,
+pinball_loss(y = Data0$Load[sel_b], gqgam.forecast, quant = 0.8,
              output.vect = FALSE)
 
-plot(Data0$Load[sel_b], type = 'l')
-lines(gqgam.forecast, col = 'red')
+plot(Data0$Load[sel_b], type = "l")
+lines(gqgam.forecast, col = "red")
 
 
 gqgam95 <- qgam(list(equation, equation_var), data = Data0[sel_a,],
@@ -374,7 +374,7 @@ gqgam95 <- qgam(list(equation, equation_var), data = Data0[sel_a,],
 #predict(gqgam95, newdata=Data0, type='terms'))
 
 y <- Data0$Load
-X <-  predict(gqgam95, newdata=Data0, type = 'terms')
+X <-  predict(gqgam, newdata=Data0, type = 'terms')
 ###scaling columns
 for (j in 1:ncol(X)){
   X[, j] <- (X[, j]-mean(X[, j])) / sd(X[, j])
@@ -393,10 +393,14 @@ rmse(y=Data0$Load[sel_b], ychap=gqgam.kalman.static)
 # dynamic
 # using iterative grid search
 ssm_dyn_q <- viking::select_Kalman_variances(ssm_q, X[sel_a, ], y[sel_a],
-                                             q_list = 2^(-30:0), p1 = 1, ncores = 6)
+                                             q_list = 2^(-30:0), p1 = 1, ncores = 1)
 saveRDS(ssm_dyn_q, "Results/ssm_dyn_q.RDS")
 
 ssm_dyn_q <- readRDS("Results/ssm_dyn_q.RDS")
+
+ssm_dyn_q <- viking::select_Kalman_variances(ssm_q, X[sel_a, ], y[sel_a],
+                                    Q_init = diag(d), method = "em",
+                                    n_iter = 500, verbose = 100)
 ssm_dyn_q <- predict(ssm_dyn_q, X, y, type = "model", compute_smooth = TRUE)
 gqgam.kalman.Dyn <- ssm_dyn_q$pred_mean %>% tail(length(sel_b))
 rmse(y = Data0$Load[sel_b], ychap = gqgam.kalman.Dyn)
