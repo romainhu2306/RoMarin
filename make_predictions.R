@@ -65,24 +65,39 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   ssm_em_pred$pred_mean
 }
 
-nb_cores <- detectCores() - 1
+# Parallel processing.
+nb_cores <- detectCores() - 3
 cluster <- makeCluster(nb_cores)
 registerDoParallel(cluster)
 
+clusterExport(cluster, varlist = c("qgam_xgb_kf", "train", "test", "qgam_eq"))
 quantiles <- seq(.1, .9, by = .1)
-preds <- foreach(q = quantiles, .combine = cbind) %dopar% {
+preds <- foreach(q = quantiles, .combine = cbind,
+                 .packages = c("qgam", "xgboost", "viking", "tidyverse",
+                               "magrittr")) %dopar% {
   qgam_xgb_kf(train, test, qgam_eq, q)
 }
 
 stopCluster(cluster)
+preds <- cbind(data0$Net_demand, preds)
 
+# Sequential processing.
+pred_90 <- qgam_xgb_kf(train, test, qgam_eq, .9)
 pred_80 <- qgam_xgb_kf(train, test, qgam_eq, .8)
 pred_70 <- qgam_xgb_kf(train, test, qgam_eq, .7)
+pred_60 <- qgam_xgb_kf(train, test, qgam_eq, .6)
+
+preds <- data.frame(Net_demand = data0$Net_demand, pred_90, pred_80, pred_70,
+                    pred_60)
+
+# Train aggregator.
+aggregator <- lm(Net_demand ~ ., data = preds[sel_a, ])
 
 # Study results.
-final_pred <- tail(qgam_80$pred_mean, nrow(test))
+aggreg_pred <- predict(aggregator, newdata = preds)
+final_pred <- aggreg_pred[-sel_a]
 
-train_res <- train$Net_demand - qgam_80$pred_mean %>% head(nrow(train))
+train_res <- train$Net_demand - aggreg_pred[sel_a]
 q_norm <- qnorm(.8, mean = mean(train_res), sd = sd(train_res))
 pinball_loss(test$Net_demand, final_pred + q_norm, quant = .8,
              output.vect = FALSE)
@@ -94,12 +109,13 @@ lines(final_pred, col = "red")
 final_res <- test$Net_demand - final_pred
 plot(final_res, type = "l")
 
-hist(final_res, breaks = 30, probability = TRUE)
-lines(density(final_res), col = "red")
+plot(cumsum(test$Net_demand - final_pred[]), type = "l", col = "red")
+
+acf(final_res)
+
+hist(final_res, breaks = 30)
 
 qqnorm(final_res)
 qqline(final_res, col = "red")
 
-ks.test(final_res, "pnorm", mean = mean(final_pred), sd = sd(final_pred))
-
-acf(final_res)
+shapiro.test(final_res)
