@@ -82,8 +82,7 @@ qgam_train_pred <- predict(qgam_model, newdata = train_xgb)
 qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
 dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -1]),
                       label = qgam_train_res)
-xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3,
-                   verbosity = 2)
+xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
 xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 100)
 
 qgam_pred <- predict(qgam_model, newdata = test)

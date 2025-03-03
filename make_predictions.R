@@ -92,8 +92,9 @@ preds <- foreach(q = quantiles, .combine = cbind,
 
 stopCluster(cluster)
 preds <- as.data.frame(preds)
-preds <- cbind(rbind(data0, data1)$Net_demand, preds)
+preds <- cbind(data0$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
+write.csv(preds, "train_full_preds.csv", row.names = FALSE)
 
 # Sequential processing.
 pred_90 <- qgam_xgb_kf(train, test, qgam_eq, .9)
@@ -124,7 +125,7 @@ lines(final_pred, col = "red")
 final_res <- test$Net_demand - final_pred
 plot(final_res, type = "l")
 
-plot(cumsum(test$Net_demand - final_pred[]), type = "l", col = "red")
+plot(cumsum(test$Net_demand - final_pred), type = "l", col = "red")
 
 acf(final_res)
 
