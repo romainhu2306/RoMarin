@@ -1,0 +1,122 @@
+```{r Loading material}
+rm(list = objects())
+
+library(mgcv)
+library(yarrr)
+library(magrittr)
+library(forecast)
+library(tidyverse)
+library(qgam)
+library(xgboost)
+library(viking)
+library(foreach)
+library(doParallel)
+source("score.R")
+
+data0 <- read_delim("data/Data0.csv", delim = ",")
+data1 <- read_delim("data/Data1.csv", delim = ",")
+
+# Formatting data1 so column names correspond to data0.
+data1 <- data1[, -c(36, 37)]
+missing_cols <- setdiff(names(data0), names(data1))
+for (col in missing_cols) {
+  data1[[col]] <- NA
+}
+data1 <- data1[, names(data0)]
+
+data0$Time <- as.numeric(data0$Date)
+data1$Time <- as.numeric(data1$Date)
+
+sel_a <- which(data0$Year <= 2020)
+train <- data0[sel_a, ]
+test <- data0[-sel_a, ]
+```
+
+```{r qgam model}
+qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
+  s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
+  s(Load.1, bs = "cr", by =  as.factor(WeekDays)) +
+  s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
+  s(Net_demand.1, bs = "cr") + s(Net_demand.7, bs = "cr")
+
+qgam_model <- qgam(qgam_eq, data = train, qu = .8)
+
+final_qgam_pred <- predict(qgam_model, newdata = test)
+print(paste("Pinball loss:", pinball_loss(test$Net_demand,
+                                          final_qgam_pred, quant = .8,
+                                          output.vect = FALSE)))
+print(paste("RMSE:", rmse(test$Net_demand, final_qgam_pred)))
+
+final_qgam_res <- test$Net_demand - final_qgam_pred
+print(paste("p-value of Shapiro-Wilk normality test on the residuals",
+            shapiro.test(final_qgam_res)$p.value))
+
+plot(test$Date, final_qgam_res, type = "l", main = "Residuals",
+     ylab = "Residuals", xlab = "Date")
+abline(h = 0, col = "red")
+
+plot(test$Date, cumsum(test$Net_demand - final_qgam_pred),
+     type = "l", col = "red", main = "Cumulative sum of the residuals",
+     ylab = "Cumulative sum of the residuals", xlab = "Date", lwd = 2)
+
+hist(final_qgam_res, probability = TRUE, breaks = 30,
+     main = "Histogram of the residuals", col = "lightblue",
+     xlab = "Residuals")
+lines(density(final_qgam_res), col = "red", lwd = 2)
+legend("topleft", "Density", col = "red", lty = 1)
+
+qqnorm(final_qgam_res, main = "Quantile-quantile plot of the residuals",
+       col = "blue")
+qqline(final_qgam_res, col = "red", lwd = 2)
+
+acf(final_qgam_res, main = "Autocorrelation of the residuals")
+```
+
+```{r Boosting with xgboost}
+idx <- sample(nrow(train), .5 * nrow(train))
+train_qgam <- train[idx, ]
+train_xgb <- train[-idx, ]
+
+qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
+qgam_train_pred <- predict(qgam_model, newdata = train_xgb)
+qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
+dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -1]),
+                      label = qgam_train_res)
+xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3,
+                   verbosity = 2)
+xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 100)
+
+qgam_pred <- predict(qgam_model, newdata = test)
+xgb_pred <- predict(xgb_model, newdata = as.matrix(test[, -1]))
+final_xgb_pred <- qgam_pred + xgb_pred
+print(paste("Pinball loss:", pinball_loss(test$Net_demand,
+                                          final_xgb_pred, quant = .8,
+                                          output.vect = FALSE)))
+print(paste("RMSE:", rmse(test$Net_demand, final_xgb_pred)))
+
+final_xgb_res <- test$Net_demand - final_xgb_pred
+print(paste("p-value of Shapiro-Wilk normality test on the residuals",
+            shapiro.test(final_xgb_res)$p.value))
+
+plot(test$Date, final_xgb_res, type = "l", main = "Residuals",
+     ylab = "Residuals", xlab = "Date")
+abline(h = 0, col = "red")
+
+plot(test$Date, cumsum(test$Net_demand - final_xgb_pred),
+     type = "l", col = "red", main = "Cumulative sum of the residuals",
+     ylab = "Cumulative sum of the residuals", xlab = "Date", lwd = 2)
+lines(cumsum(test$Net_demand - final_xgb_pred), type = "l", col = "blue",
+      lwd = 2)
+
+hist(final_xgb_res, probability = TRUE, breaks = 30,
+     main = "Histogram of the residuals", col = "lightblue",
+     xlab = "Residuals")
+lines(density(final_xgb_res), col = "red", lwd = 2)
+legend("topleft", "Density", col = "red", lty = 1)
+
+qqnorm(final_xgb_res, main = "Quantile-quantile plot of the residuals",
+       col = "blue")
+qqline(final_xgb_res, col = "red", lwd = 2)
+
+acf(final_xgb_res, main = "Autocorrelation of the residuals")
+```

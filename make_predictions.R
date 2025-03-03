@@ -15,12 +15,24 @@ source("score.R")
 data0 <- read_delim("data/Data0.csv", delim = ",")
 data1 <- read_delim("data/Data1.csv", delim = ",")
 
+# Formatting data1 so column names correspond to data0.
+data1 <- data1[, -c(36, 37)]
+missing_cols <- setdiff(names(data0), names(data1))
+for (col in missing_cols) {
+  data1[[col]] <- NA
+}
+data1 <- data1[, names(data0)]
+
 data0$Time <- as.numeric(data0$Date)
 data1$Time <- as.numeric(data1$Date)
 
+# For validation.
 sel_a <- which(data0$Year <= 2020)
 train <- data0[sel_a, ]
 test <- data0[-sel_a, ]
+
+# For prediction on data1.
+sel_a <- seq_len(nrow(data0))
 
 qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
@@ -79,7 +91,9 @@ preds <- foreach(q = quantiles, .combine = cbind,
 }
 
 stopCluster(cluster)
-preds <- cbind(data0$Net_demand, preds)
+preds <- as.data.frame(preds)
+preds <- cbind(rbind(data0, data1)$Net_demand, preds)
+colnames(preds)[1] <- "Net_demand"
 
 # Sequential processing.
 pred_90 <- qgam_xgb_kf(train, test, qgam_eq, .9)
@@ -99,7 +113,8 @@ final_pred <- aggreg_pred[-sel_a]
 
 train_res <- train$Net_demand - aggreg_pred[sel_a]
 q_norm <- qnorm(.8, mean = mean(train_res), sd = sd(train_res))
-pinball_loss(test$Net_demand, final_pred + q_norm, quant = .8,
+final_pred <- final_pred + q_norm
+pinball_loss(test$Net_demand, final_pred, quant = .8,
              output.vect = FALSE)
 
 rmse(test$Net_demand, final_pred)
@@ -119,3 +134,7 @@ qqnorm(final_res)
 qqline(final_res, col = "red")
 
 shapiro.test(final_res)
+
+submit <- data.frame(Id = seq_len(length(final_pred)), Net_demand = final_pred)
+write.table(submit, file = "pred.csv", quote = FALSE, sep = ",", dec = ".",
+            row.names = FALSE)
