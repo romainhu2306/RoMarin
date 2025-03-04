@@ -421,12 +421,3 @@ lines(xgb2.forecast, col='red')
 
 
 mean(Data0[sel_b,]$Load>xgb2.forecast)
-
-
-
-
-
-
-
-
-

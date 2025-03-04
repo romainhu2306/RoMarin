@@ -101,11 +101,63 @@ plot(test$Date, final_xgb_res, type = "l", main = "Residuals",
      ylab = "Residuals", xlab = "Date")
 abline(h = 0, col = "red")
 
-plot(test$Date, cumsum(test$Net_demand - final_xgb_pred),
+plot(test$Date, cumsum(final_qgam_res),
      type = "l", col = "red", main = "Cumulative sum of the residuals",
      ylab = "Cumulative sum of the residuals", xlab = "Date", lwd = 2)
-lines(cumsum(test$Net_demand - final_xgb_pred), type = "l", col = "blue",
+lines(cumsum(final_xgb_res), type = "l", col = "blue",
       lwd = 2)
+legend("topleft", c("qgam alone", "qgam + xgboost"), col = c("red", "blue"),
+       lty = 1)
+
+hist(final_xgb_res, probability = TRUE, breaks = 30,
+     main = "Histogram of the residuals", col = "lightblue",
+     xlab = "Residuals")
+lines(density(final_xgb_res), col = "red", lwd = 2)
+legend("topleft", "Density", col = "red", lty = 1)
+
+qqnorm(final_xgb_res, main = "Quantile-quantile plot of the residuals",
+       col = "blue")
+qqline(final_xgb_res, col = "red", lwd = 2)
+
+acf(final_xgb_res, main = "Autocorrelation of the residuals")
+```
+
+```{r Online learning with Kalman filtering}
+qgam_terms <- predict(qgam_model, newdata = data0, type = "terms")
+qgam_pred <- predict(qgam_model, newdata = data0)
+xgb_pred <- predict(xgb_model, newdata = as.matrix(data0[, -1]))
+boosted_pred <- xgb_pred + qgam_pred
+input <- cbind(qgam_terms, boosted_pred) %>% scale %>% cbind(1)
+target <- data0$Net_demand
+ssm <- statespace(input, target)
+ssm_em <- select_Kalman_variances(ssm, input[sel_a, ],
+                                  target[sel_a],
+                                  Q_init = diag(ncol(input)), method = "em",
+                                  n_iter = 1000, verbose = 100)
+
+ssm_em_pred <- predict(ssm_em, input, target, type = "model",
+                       compute_smooth = TRUE)
+final_kf_pred <- ssm_em_pred$pred_mean[-sel_a]
+print(paste("Pinball loss:", pinball_loss(test$Net_demand,
+                                          final_kf_pred, quant = .8,
+                                          output.vect = FALSE)))
+print(paste("RMSE:", rmse(test$Net_demand, final_kf_pred)))
+
+final_xgb_res <- test$Net_demand - final_xgb_pred
+print(paste("p-value of Shapiro-Wilk normality test on the residuals",
+            shapiro.test(final_xgb_res)$p.value))
+
+plot(test$Date, final_xgb_res, type = "l", main = "Residuals",
+     ylab = "Residuals", xlab = "Date")
+abline(h = 0, col = "red")
+
+plot(test$Date, cumsum(final_qgam_res),
+     type = "l", col = "red", main = "Cumulative sum of the residuals",
+     ylab = "Cumulative sum of the residuals", xlab = "Date", lwd = 2)
+lines(cumsum(final_xgb_res), type = "l", col = "blue",
+      lwd = 2)
+legend("topleft", c("qgam alone", "qgam + xgboost"), col = c("red", "blue"),
+       lty = 1)
 
 hist(final_xgb_res, probability = TRUE, breaks = 30,
      main = "Histogram of the residuals", col = "lightblue",

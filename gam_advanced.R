@@ -349,9 +349,9 @@ lines(Data0$Date[sel_b], cumsum(Data0$Load[sel_b] - gam9.kalman.Dyn2),
 ##################qgam
 ################################################################################
 library(qgam)
-equation <- Load ~ s(as.numeric(Date), k = 3, bs = "cr") +
+equation <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
-  s(Load.1, bs = "cr", by = as.factor(WeekDays)) + s(Load.7, bs = "cr") +
+  s(Net_demand.1, bs = "cr", by = as.factor(WeekDays)) + s(Net_demand.7, bs = "cr") +
   as.factor(WeekDays) + BH 
 equation_var <- ~ s(Temp, k = 10, bs = 'cr') + s(Load.1)
 gqgam <- qgam(list(equation, equation_var), data = Data0[sel_a,],
@@ -359,7 +359,7 @@ gqgam <- qgam(list(equation, equation_var), data = Data0[sel_a,],
 gqgam <- qgam(equation, data = Data0[sel_a, ], qu = 0.8)
 
 gqgam.forecast <- predict(gqgam, newdata = Data0[sel_b, ])
-pinball_loss(y = Data0$Load[sel_b], gqgam.forecast, quant = 0.8,
+pinball_loss(y = Data0$Net_demand[sel_b], gqgam.forecast, quant = 0.8,
              output.vect = FALSE)
 
 plot(Data0$Load[sel_b], type = "l")
