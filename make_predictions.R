@@ -33,12 +33,13 @@ data0$Time <- as.numeric(data0$Date)
 data1$Time <- as.numeric(data1$Date)
 
 # For validation.
-sel_a <- which(data0$Year <= 2020)
+sel_a <- which(data0$Year <= 2021)
 train <- data0[sel_a, ]
 test <- data0[-sel_a, ]
 
 # For prediction on data1.
 sel_a <- seq_len(nrow(data0))
+full_data <- rbind(data0, data1)
 
 qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
@@ -50,7 +51,7 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   # Separate train sets for qgam and xgb.
   full_data <- rbind(train, test)
   nrow_train <- nrow(train)
-  idx <- sample(nrow_train, .5 * nrow_train)
+  idx <- seq_len(.5 * nrow(train))
   train_qgam <- train[idx, ]
   train_xgb <- train[-idx, ]
 
@@ -62,10 +63,8 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
   dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                         label = qgam_train_res)
-  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3,
-                     verbosity = 2)
-  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 10000,
-                         early_stopping_rounds = 100)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
 
   # Kalman filtering with expectation maximization on final prediction.
   qgam_terms <- predict(qgam_model, newdata = full_data, type = "terms")
@@ -102,14 +101,14 @@ stopCluster(cluster)
 preds <- as.data.frame(preds)
 preds <- cbind(data0$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
-write.csv(preds, "train_preds_pin.csv", row.names = FALSE)
+write.csv(preds, "exp1.csv", row.names = FALSE)
 
 # Train aggregator.
-preds <- read.csv("train_preds_base.csv")
+preds <- read.csv("train_preds_base5.csv")
 target <- data0$Net_demand
 experts <- preds[, -1]
-experts[, 3] <- experts[, 3] - 20
-agg <- mixture(target, experts, model = "MLpol", loss.gradient = TRUE,
+experts[, 7] <- experts[, 7] + 20
+agg <- mixture(target, experts, model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 plot(agg)
 
@@ -156,63 +155,20 @@ write.table(submit, file = "pred.csv", quote = FALSE, sep = ",", dec = ".",
 
 
 
+idx <- sample(nrow(data0), .5 * nrow(data0))
+train_qgam <- data0[idx, ]
+train_xgb <- data0[-idx, ]
+qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
 
+qgam_pred <- predict(qgam_model, train_xgb)
+res <- train_xgb$Net_demand - qgam_pred
 
+dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
+                      label = res)
+xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
+xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
 
-
-
-
-
-
-
-qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
-  # Separate train sets for qgam and xgb.
-  full_data <- rbind(train, test)
-  nrow_train <- nrow(train)
-  idx <- sample(nrow_train, .5 * nrow_train)
-  train_qgam <- train[idx, ]
-  train_xgb <- train[-idx, ]
-
-  # Train qgam model.
-  qgam_model <- qgam(qgam_eq, data = train_qgam, qu = quantile)
-
-  # Boost qgam model with xgboost.
-  myobjective <- function(preds, dtrain) {
-    labels <- getinfo(dtrain, "label")
-    grad <- (labels < preds) - quantile
-    hess <- rep(1, length(labels))
-    list(grad = grad, hess = hess)
-  }
-
-  evalerror <- function(preds, dtrain) {
-    labels <- getinfo(dtrain, "label")
-    u <- (labels - preds) * (quantile - (labels < preds))
-    err <- sum(u) / length(u)
-    list(metric = "MyError", value = err)
-  }
-
-  qgam_train_pred <- predict(qgam_model, newdata = train_xgb)
-  qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
-  dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
-                        label = qgam_train_res)
-  xgb_params <- list(objective = myobjective, eval_metric = evalerror,
-                     eta = .1, max_depth = 3, verbosity = 2, maximize = TRUE)
-  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 100)
-
-  # Kalman filtering with expectation maximization on final prediction.
-  qgam_terms <- predict(qgam_model, newdata = full_data, type = "terms")
-  qgam_pred <- predict(qgam_model, newdata = full_data)
-  xgb_pred <- predict(xgb_model,
-                      newdata = as.matrix(full_data[, -c(1, 2, 5, 6, 7)]))
-  boosted_pred <- qgam_pred + xgb_pred
-  input <- cbind(qgam_terms, boosted_pred) %>% scale %>% cbind(1)
-  target <- full_data$Net_demand
-  ssm <- statespace(input, target)
-  ssm_em <- select_Kalman_variances(ssm, input[seq_len(nrow_train), ],
-                                    target[seq_len(nrow_train)],
-                                    Q_init = diag(ncol(input)), method = "em",
-                                    n_iter = 1000, verbose = 100)
-  ssm_em_pred <- predict(ssm_em, input, target, type = "model",
-                         compute_smooth = TRUE)
-  ssm_em_pred$pred_mean
-}
+pred1 <- predict(qgam_model, data1)
+pred2 <- predict(xgb_model, as.matrix(data1[, -c(1, 2, 5, 6, 7)]))
+pinball_loss(data1$Net_demand, pred1 + pred2, quant = .8)
+rmse(data1$Net_demand, pred1 + pred2)
