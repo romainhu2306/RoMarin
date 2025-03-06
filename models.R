@@ -121,8 +121,8 @@ qgam_xgb <- function(train, test, qgam_eq, quantile) {
 
   dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                         label = res)
-  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
-  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 500)
 
   pred1 <- predict(qgam_model, test)
   pred2 <- predict(xgb_model, as.matrix(test[, -c(1, 2, 5, 6, 7)]))
@@ -153,22 +153,23 @@ clusterExport(cluster, varlist = c("qgam_xgb", "data0", "data1", "qgam_eq"))
 quantiles <- seq(.1, .9, by = .1)
 preds <- foreach(q = quantiles, .combine = cbind,
                  .packages = c("qgam", "xgboost", "viking", "tidyverse",
-                               "magrittr")) %dopar% {
+                               "magrittr", "opera")) %dopar% {
   nb_boots <- 10
   boot_samples <- replicate(nb_boots, sample(seq_len(nrow(data0)), replace = TRUE))
   predictions <- apply(boot_samples, 2, function(x) {qgam_xgb(data0[x, ], data1, qgam_eq, .8)})
   target <- data1$Net_demand
   agg <- mixture(target, predictions, model = "MLpol",
-               loss.type = list(name = "pinball", tau = .8))
+               loss.type = list(name = "pinball", tau = q))
   final_pred <- agg$prediction
 }
 
-
+stopCluster(cluster)
+preds <- as.data.frame(preds)
+preds <- cbind(data1$Net_demand, preds)
+colnames(preds)[1] <- "Net_demand"
 
 target <- data1$Net_demand
-experts <- preds[, -1]
-experts[, 2] <- experts[, 2] + 20
-agg <- mixture(target, experts, model = "MLpol",
+agg <- mixture(target, preds[, -1], model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 
 final_pred <- agg$prediction
@@ -177,3 +178,4 @@ pinball_loss(data1$Net_demand, final_pred, quant = .8,
              output.vect = FALSE)
 
 rmse(data1$Net_demand, final_pred)
+plot(agg)

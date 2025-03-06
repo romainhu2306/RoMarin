@@ -95,13 +95,13 @@ stopCluster(cluster)
 preds <- as.data.frame(preds)
 preds <- cbind(data1$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
-write.csv(preds, "qgam_xgb_agg.csv", row.names = FALSE)
+write.csv(preds, "qgam_xgb_agg3.csv", row.names = FALSE)
 
 # Train aggregator.
-preds <- read.csv("qgam_xgb_agg.csv")
+preds <- read.csv("qgam_xgb_agg2.csv")
 target <- data1$Net_demand
 experts <- preds[, -1]
-experts[, 2] <- experts[, 2] + 20
+experts[, 8] <- experts[, 8] - 1500
 agg <- mixture(target, experts, model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 plot(agg)
@@ -117,7 +117,7 @@ final_pred <- final_pred + q_norm
 pinball_loss(data1$Net_demand, final_pred, quant = .8,
              output.vect = FALSE)
 
-rmse(data1$Net_demand, agg_pred)
+rmse(data1$Net_demand, final_pred)
 plot(data1$Net_demand, type = "l")
 lines(final_pred, col = "red")
 
@@ -125,28 +125,18 @@ final_res <- data1$Net_demand - final_pred
 plot(final_res, type = "l")
 abline(h = 0, col = "red")
 
-plot(cumsum(final_res), type = "l", col = "red")
-for (i in 2:10) {
-  predq <- unlist(preds[, i])
-  final_predq <- predq[-sel_a]
-  train_resq <- train$Net_demand - predq[sel_a]
-  q_normq <- qnorm(.8, mean = mean(train_resq), sd = sd(train_resq))
-  final_predq <- final_predq + q_normq
-  final_resq <- test$Net_demand - final_predq
-  lines(cumsum(final_resq), type = "l", col = "blue")
-}
-
 acf(final_res)
 
-hist(final_res, breaks = 30)
+hist(final_res, probability = TRUE, breaks = 30, col = "lightblue")
+lines(density(final_res), col = "red", lwd = 2)
 
 qqnorm(final_res)
 qqline(final_res, col = "red")
 
-final_pred <- read.csv("qgam_xgb_agg.csv")[, 2]
+final_pred <- read.csv("qgam_xgb_agg2_penalized.csv")[, 2]
 final_pred <- pred
 submit <- data.frame(Id = seq_len(length(final_pred)), Net_demand = final_pred)
-write.table(submit, file = "qgam_and_xgb.csv", quote = FALSE, sep = ",", dec = ".",
+write.table(submit, file = "qgam_and_xgb2_penalized.csv", quote = FALSE, sep = ",", dec = ".",
             row.names = FALSE)
 
 
@@ -172,24 +162,40 @@ rmse(data1$Net_demand, pred1 + pred2)
 
 
 qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
-  idx <- sample(nrow(train), .5 * nrow(test))
+  idx <- sample(nrow(train), .5 * nrow(train))
   train_qgam <- train[idx, ]
   train_xgb <- train[-idx, ]
   qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
+  full_data <- rbind(data0, data1)
 
   qgam_pred <- predict(qgam_model, train_xgb)
   res <- train_xgb$Net_demand - qgam_pred
 
   dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                         label = res)
-  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
-  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 500)
 
-  pred1 <- predict(qgam_model, test)
-  pred2 <- predict(xgb_model, as.matrix(test[, -c(1, 2, 5, 6, 7)]))
+  pred1 <- predict(qgam_model, full_data)
+  pred2 <- predict(xgb_model, as.matrix(full_data[, -c(1, 2, 5, 6, 7)]))
   pred1 + pred2
 }
 
 pred <- qgam_xgb_kf(data0, data1, qgam_eq, .8)
-pinball_loss(data1$Net_demand, pred, quant = .8)
+pinball_loss(data1$Net_demand, pred[-sel_a] + q_norm, quant = .8)
 rmse(data1$Net_demand, pred)
+
+q <- 0.8
+myobjective <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, "label")
+  grad <- (labels < preds)-q
+  hess <- rep(1, length(labels))
+  return(list(grad = grad, hess = hess))
+}
+
+evalerror <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, "label")
+  u = (labels-preds)*(q-(labels<preds))
+  err <- sum(u) / length(u)
+  return(list(metric = "MyError", value = err))
+}
