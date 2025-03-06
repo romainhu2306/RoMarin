@@ -32,11 +32,6 @@ data1 <- data1[, names(data0)]
 data0$Time <- as.numeric(data0$Date)
 data1$Time <- as.numeric(data1$Date)
 
-# For validation.
-sel_a <- which(data0$Year <= 2021)
-train <- data0[sel_a, ]
-test <- data0[-sel_a, ]
-
 # For prediction on data1.
 sel_a <- seq_len(nrow(data0))
 full_data <- rbind(data0, data1)
@@ -85,29 +80,28 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
 }
 
 # Parallel processing.
-nb_cores <- detectCores() - 2
-cluster <- makeCluster(nb_cores)
+cluster <- makeCluster(9)
 registerDoParallel(cluster)
 
-clusterExport(cluster, varlist = c("qgam_xgb_kf", "train", "test", "qgam_eq"))
+clusterExport(cluster, varlist = c("qgam_xgb_kf", "data0", "data1", "qgam_eq"))
 quantiles <- seq(.1, .9, by = .1)
 preds <- foreach(q = quantiles, .combine = cbind,
                  .packages = c("qgam", "xgboost", "viking", "tidyverse",
                                "magrittr")) %dopar% {
-  qgam_xgb_kf(train, test, qgam_eq, q)
+  qgam_xgb_kf(data0, data1, qgam_eq, q)
 }
 
 stopCluster(cluster)
 preds <- as.data.frame(preds)
-preds <- cbind(data0$Net_demand, preds)
+preds <- cbind(data1$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
-write.csv(preds, "exp1.csv", row.names = FALSE)
+write.csv(preds, "qgam_xgb_agg.csv", row.names = FALSE)
 
 # Train aggregator.
-preds <- read.csv("train_preds_base5.csv")
-target <- data0$Net_demand
+preds <- read.csv("qgam_xgb_agg.csv")
+target <- data1$Net_demand
 experts <- preds[, -1]
-experts[, 7] <- experts[, 7] + 20
+experts[, 2] <- experts[, 2] + 20
 agg <- mixture(target, experts, model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 plot(agg)
@@ -115,18 +109,19 @@ plot(agg)
 # Study results.
 agg_pred <- agg$prediction
 final_pred <- agg_pred[-sel_a, ]
+final_pred <- agg_pred
 
-train_res <- train$Net_demand - agg_pred[sel_a]
+train_res <- data0$Net_demand - agg_pred[sel_a]
 q_norm <- qnorm(.8, mean = mean(train_res), sd = sd(train_res))
 final_pred <- final_pred + q_norm
-pinball_loss(test$Net_demand, final_pred, quant = .8,
+pinball_loss(data1$Net_demand, final_pred, quant = .8,
              output.vect = FALSE)
 
-rmse(test$Net_demand, final_pred)
-plot(test$Net_demand, type = "l")
+rmse(data1$Net_demand, agg_pred)
+plot(data1$Net_demand, type = "l")
 lines(final_pred, col = "red")
 
-final_res <- test$Net_demand - final_pred
+final_res <- data1$Net_demand - final_pred
 plot(final_res, type = "l")
 abline(h = 0, col = "red")
 
@@ -148,8 +143,10 @@ hist(final_res, breaks = 30)
 qqnorm(final_res)
 qqline(final_res, col = "red")
 
+final_pred <- read.csv("qgam_xgb_agg.csv")[, 2]
+final_pred <- pred
 submit <- data.frame(Id = seq_len(length(final_pred)), Net_demand = final_pred)
-write.table(submit, file = "pred.csv", quote = FALSE, sep = ",", dec = ".",
+write.table(submit, file = "qgam_and_xgb.csv", quote = FALSE, sep = ",", dec = ".",
             row.names = FALSE)
 
 
@@ -172,3 +169,27 @@ pred1 <- predict(qgam_model, data1)
 pred2 <- predict(xgb_model, as.matrix(data1[, -c(1, 2, 5, 6, 7)]))
 pinball_loss(data1$Net_demand, pred1 + pred2, quant = .8)
 rmse(data1$Net_demand, pred1 + pred2)
+
+
+qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
+  idx <- sample(nrow(train), .5 * nrow(test))
+  train_qgam <- train[idx, ]
+  train_xgb <- train[-idx, ]
+  qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
+
+  qgam_pred <- predict(qgam_model, train_xgb)
+  res <- train_xgb$Net_demand - qgam_pred
+
+  dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
+                        label = res)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
+
+  pred1 <- predict(qgam_model, test)
+  pred2 <- predict(xgb_model, as.matrix(test[, -c(1, 2, 5, 6, 7)]))
+  pred1 + pred2
+}
+
+pred <- qgam_xgb_kf(data0, data1, qgam_eq, .8)
+pinball_loss(data1$Net_demand, pred, quant = .8)
+rmse(data1$Net_demand, pred)
