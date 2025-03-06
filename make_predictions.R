@@ -95,7 +95,7 @@ stopCluster(cluster)
 preds <- as.data.frame(preds)
 preds <- cbind(data1$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
-write.csv(preds, "qgam_xgb_agg3.csv", row.names = FALSE)
+write.csv(preds, "qgam_xgb_agg2.csv", row.names = FALSE)
 
 # Train aggregator.
 preds <- read.csv("qgam_xgb_agg2.csv")
@@ -166,7 +166,6 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   train_qgam <- train[idx, ]
   train_xgb <- train[-idx, ]
   qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
-  full_data <- rbind(data0, data1)
 
   qgam_pred <- predict(qgam_model, train_xgb)
   res <- train_xgb$Net_demand - qgam_pred
@@ -176,13 +175,13 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1)
   xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 500)
 
-  pred1 <- predict(qgam_model, full_data)
-  pred2 <- predict(xgb_model, as.matrix(full_data[, -c(1, 2, 5, 6, 7)]))
+  pred1 <- predict(qgam_model, test)
+  pred2 <- predict(xgb_model, as.matrix(test[, -c(1, 2, 5, 6, 7)]))
   pred1 + pred2
 }
 
 pred <- qgam_xgb_kf(data0, data1, qgam_eq, .8)
-pinball_loss(data1$Net_demand, pred[-sel_a] + q_norm, quant = .8)
+pinball_loss(data1$Net_demand, pred, quant = .8)
 rmse(data1$Net_demand, pred)
 
 q <- 0.8

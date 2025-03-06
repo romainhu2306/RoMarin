@@ -135,6 +135,7 @@ boot_samples <- replicate(nb_boots, sample(seq_len(nrow(data0)), replace = TRUE)
 predictions <- apply(boot_samples, 2, function(x) {qgam_xgb(data0[x, ], data1, qgam_eq, .8)})
 
 target <- data1$Net_demand
+predictions[, 3] <- predictions[, 3] - 1400
 agg <- mixture(target, predictions, model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 
@@ -154,7 +155,7 @@ quantiles <- seq(.1, .9, by = .1)
 preds <- foreach(q = quantiles, .combine = cbind,
                  .packages = c("qgam", "xgboost", "viking", "tidyverse",
                                "magrittr", "opera")) %dopar% {
-  nb_boots <- 10
+  nb_boots <- 5
   boot_samples <- replicate(nb_boots, sample(seq_len(nrow(data0)), replace = TRUE))
   predictions <- apply(boot_samples, 2, function(x) {qgam_xgb(data0[x, ], data1, qgam_eq, .8)})
   target <- data1$Net_demand
@@ -169,6 +170,7 @@ preds <- cbind(data1$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
 
 target <- data1$Net_demand
+preds[, 5] <- preds[, 5] - 1500
 agg <- mixture(target, preds[, -1], model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 
@@ -179,3 +181,38 @@ pinball_loss(data1$Net_demand, final_pred, quant = .8,
 
 rmse(data1$Net_demand, final_pred)
 plot(agg)
+
+
+
+
+
+
+
+
+
+
+
+
+qgam_xgb <- function(train, test, qgam_eq, quantile) {
+  # Separate train sets for qgam and xgb.
+  full_data <- rbind(train, test)
+
+  # Train qgam model.
+  qgam_model <- qgam(qgam_eq, data = train, qu = quantile)
+
+  # Kalman filtering with expectation maximization on final prediction.
+  qgam_terms <- predict(qgam_model, newdata = full_data, type = "terms")
+  input <- qgam_terms %>% scale %>% cbind(1)
+  target <- full_data$Net_demand
+  ssm <- statespace(input, target)
+  ssm_em <- select_Kalman_variances(ssm, input[seq_len(nrow(train)), ],
+                                    target[seq_len(nrow(train))],
+                                    Q_init = diag(ncol(input)), method = "em",
+                                    n_iter = 1000, verbose = 100)
+  ssm_em_pred <- predict(ssm_em, input, target, type = "model",
+                         compute_smooth = TRUE)
+  ssm_em_pred$pred_mean
+}
+pred <- qgam_xgb(data0, data1, qgam_eq, .8)
+pred <- pred[-sel_a]
+pinball_loss(data1$Net_demand, pred, quant = .8)
