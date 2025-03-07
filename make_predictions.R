@@ -93,22 +93,32 @@ preds <- foreach(q = quantiles, .combine = cbind,
 
 stopCluster(cluster)
 preds <- as.data.frame(preds)
-preds <- cbind(data1$Net_demand, preds)
+preds <- cbind(full_data$Net_demand, preds)
 colnames(preds)[1] <- "Net_demand"
-write.csv(preds, "qgam_xgb_agg2.csv", row.names = FALSE)
+write.csv(preds, "qgam_xgb_agg3.csv", row.names = FALSE)
 
 # Train aggregator.
 preds <- read.csv("qgam_xgb_agg2.csv")
-target <- data1$Net_demand
+target <- full_data$Net_demand
 experts <- preds[, -1]
-experts[, 8] <- experts[, 8] - 1500
+experts[, 8] <- experts[, 8] - 500
 agg <- mixture(target, experts, model = "MLpol",
                loss.type = list(name = "pinball", tau = .8))
 plot(agg)
 
 # Study results.
 agg_pred <- agg$prediction
-final_pred <- agg_pred[-sel_a, ]
+
+y <- full_data$Net_demand
+precedent <- read.csv("qgam_xgb_agg2_penalized.csv")[, 2]
+X <- rbind(agg_pred[sel_a], precedent) %>% scale %>% cbind(1)
+ssm <- statespace(X, y)
+ssm_em <- select_Kalman_variances(ssm, X[sel_a, ], y[sel_a],
+                                  method = "em", Q_init <- diag(ncol(X)),
+                                  n_iter = 1000, verbose = 100)
+agg_pred <- predict(ssm_em, X, y, type = "model", compute_smooth = TRUE)$pred_mean
+
+final_pred <- agg_pred[-sel_a]
 final_pred <- agg_pred
 
 train_res <- data0$Net_demand - agg_pred[sel_a]
@@ -152,8 +162,35 @@ res <- train_xgb$Net_demand - qgam_pred
 
 dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                       label = res)
-xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
-xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
+xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1, lambda = 5, subsample = .7, colsample_bytree = 1)
+
+cv_params <- expand.grid(
+                         eta = c(.01, .1, .3),
+                         alpha = seq(1, 10, by = 3),
+                         lambda = seq(1, 10, by = 3),
+                         subsample = seq(.1, 1, by = .3),
+                         colsample_bytree = seq(.1, 1, by = .3))
+
+best_score <- Inf
+best_params <- NULL
+for (i in seq_len(nrow(cv_params))){
+  params <- list(
+                 eta = cv_params$eta[i],
+                 alpha = cv_params$alpha[i],
+                 lambda = cv_params$lambda[i],
+                 subsample = cv_params$subsample[i],
+                 colsample_bytree = cv_params$colsample_bytree[i])
+  
+  cv_results <- xgb.cv(params = params, data = dtrain, nrounds = 100, nfold = 5, stratified = TRUE, early_stopping_rounds = 5)
+  mean_rmse <- min(cv_results$evaluation_log$test_rmse_mean)
+
+  if (mean_rmse < best_score){
+    best_score <- mean_rmse
+    best_params <- params
+  }
+}
+print(best_params)
+xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 500)
 
 pred1 <- predict(qgam_model, data1)
 pred2 <- predict(xgb_model, as.matrix(data1[, -c(1, 2, 5, 6, 7)]))
@@ -161,10 +198,28 @@ pinball_loss(data1$Net_demand, pred1 + pred2, quant = .8)
 rmse(data1$Net_demand, pred1 + pred2)
 
 
+
+
+
+qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
+  s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
+  s(Load.1, bs = "cr", by =  as.factor(WeekDays)) +
+  s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
+  s(Solar_power.1, bs = "cr") + s(Net_demand.1, bs = "cr")
+
+qgam_model <- qgam(qgam_eq, data = data0, qu = .8)
+pred_train <- predict(qgam_model)
+pred_test <- predict(qgam_model, data1)
+
+
+
+
+
 qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   idx <- sample(nrow(train), .5 * nrow(train))
   train_qgam <- train[idx, ]
   train_xgb <- train[-idx, ]
+  full_data <- rbind(data0, data1)
   qgam_model <- qgam(qgam_eq, data = train_qgam, qu = .8)
 
   qgam_pred <- predict(qgam_model, train_xgb)
@@ -172,17 +227,17 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
 
   dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                         label = res)
-  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1)
-  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 500)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1, lambda = 0, subsample = .7, colsample_bytree = 1)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 1000)
 
-  pred1 <- predict(qgam_model, test)
-  pred2 <- predict(xgb_model, as.matrix(test[, -c(1, 2, 5, 6, 7)]))
+  pred1 <- predict(qgam_model, full_data)
+  pred2 <- predict(xgb_model, as.matrix(full_data[, -c(1, 2, 5, 6, 7)]))
   pred1 + pred2
 }
 
 pred <- qgam_xgb_kf(data0, data1, qgam_eq, .8)
-pinball_loss(data1$Net_demand, pred, quant = .8)
-rmse(data1$Net_demand, pred)
+pinball_loss(data1$Net_demand, pred[-sel_a], quant = .8)
+rmse(data1$Net_demand, pred[-sel_a])
 
 q <- 0.8
 myobjective <- function(preds, dtrain) {
