@@ -1,5 +1,7 @@
+# CLEAR ENVIRONMENT
 rm(list = objects())
 
+# LOAD LIBRARIES
 library(mgcv)
 library(yarrr)
 library(magrittr)
@@ -12,29 +14,62 @@ library(foreach)
 library(doParallel)
 library(data.table)
 library(opera)
+
+# SCORE FUNCTIONS
 source("score.R")
 
+# DATA
 data0 <- read_delim("data/Data0.csv", delim = ",")
 data1 <- read_delim("data/Data1.csv", delim = ",")
 
-# Formatting data1 so column names correspond to data0.
+# MERGING DATA1 AND DATA0
+# Remove usage and Id columns.
 data1 <- data1[, -c(36, 37)]
+
+# Use lagged features to reconstruct missing features.
 data1 <- data1 %>% mutate(Net_demand = lead(Net_demand.1, n = 1))
 data1$Net_demand[nrow(data1)] <- data1$Net_demand[nrow(data1) - 1]
+
 data1 <- data1 %>% mutate(Load = lead(Load.1, n = 1))
 data1$Load[nrow(data1)] <- data1$Load[nrow(data1) - 1]
+
 data1 <- data1 %>% mutate(Solar_power = lead(Solar_power.1, n = 1))
 data1$Solar_power[nrow(data1)] <- data1$Solar_power[nrow(data1) - 1]
+
 data1 <- data1 %>% mutate(Wind_power = lead(Wind_power.1, n = 1))
 data1$Wind_power[nrow(data1)] <- data1$Wind_power[nrow(data1) - 1]
+
+# Reordering column names.
 data1 <- data1[, names(data0)]
 
-data0$Time <- as.numeric(data0$Date)
-data1$Time <- as.numeric(data1$Date)
-
-# For prediction on data1.
-sel_a <- seq_len(nrow(data0))
+# Create full dataset for online learning.
 full_data <- rbind(data0, data1)
+
+# For identifying data0 in the full dataset.
+data0_idx <- seq_len(nrow(data0))
+
+
+hypotrochoid <- function(t, r1, r2, r3, w1, w2, w3, d1, d2) {
+  (r1 - r2) * cos(w1 * t) +
+    d1 * cos((r1 - r2) / r2 * w2 * t) +
+    d2 * cos((r2 - r3) / r3 * w3 * t)
+}
+
+sequence <- seq(0, 30, by = .01)
+graph <- hypotrochoid(sequence,
+                      r1 = 10,
+                      r2 = 9,
+                      r3 = 1,
+                      w1 = 1,
+                      w2 = 1,
+                      w3 = 1,
+                      d1 = 1,
+                      d2 = 1)
+plot(sequence, graph, type = "l", lwd = 2)
+
+
+
+
 
 pinball_loss(data1$Net_demand, final_pred, quant = .8,
              output.vect = FALSE)
