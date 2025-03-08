@@ -36,3 +36,39 @@ data1$Time <- as.numeric(data1$Date)
 sel_a <- seq_len(nrow(data0))
 full_data <- rbind(data0, data1)
 
+pinball_loss(data1$Net_demand, final_pred, quant = .8,
+             output.vect = FALSE)
+
+rmse(data1$Net_demand, final_pred)
+plot(data1$Net_demand, type = "l")
+lines(final_pred, col = "red")
+
+final_res <- data1$Net_demand - final_pred
+plot(data1$Date, final_res,
+     type = "l",
+     xlab = "Time",
+     ylab = "Residuals")
+abline(h = 0,
+       col = "red",
+       lwd = 2)
+
+acf(final_res)
+
+hist(final_res,
+     probability = TRUE,
+     breaks = 30,
+     col = "lightblue",
+     ylab = "Residuals",
+     main = "Histogram of the residuals")
+lines(density(final_res),
+      col = "red",
+      lwd = 2)
+legend("topleft",
+       legend = "Density",
+       col = "red",
+       lty = 1)
+
+qqnorm(final_res)
+qqline(final_res, col = "red", lwd = 2)
+
+shapiro.test(final_res)
