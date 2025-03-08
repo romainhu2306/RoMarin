@@ -58,8 +58,8 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   qgam_train_res <- train_xgb$Net_demand - qgam_train_pred
   dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                         label = qgam_train_res)
-  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3)
-  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 3000)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, subsample = .7)
+  xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 1000)
 
   # Kalman filtering with expectation maximization on final prediction.
   qgam_terms <- predict(qgam_model, newdata = full_data, type = "terms")
@@ -77,9 +77,9 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
   ssm_em_pred <- predict(ssm_em, input, target, type = "model",
                          compute_smooth = TRUE)$pred_mean
   train_res <- train$Net_demand - ssm_em_pred[seq_len(nrow_train)]
-  q_norm <- qnorm(q, mean = mean(train_res), sd = sd(train_res))
+  q_norm <- qnorm(quantile, mean = mean(train_res), sd = sd(train_res))
   ssm_em_pred[-seq_len(nrow_train)] <- ssm_em_pred[-seq_len(nrow_train)] + q_norm
-  ssm_em_pred$pred_mean
+  ssm_em_pred
 }
 
 # Parallel processing.
