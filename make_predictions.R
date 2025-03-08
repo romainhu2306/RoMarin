@@ -249,7 +249,7 @@ png("images/stemp_iterac.png", width = 600, height = 600)
 vis.gam(qgam_model, view = c("Temp_s99", "Temp_s95_min"), theta = 30, ticktype = "detailed", color = "terrain")
 dev.off()
 
-png("images/stemp_iterac.png", width = 600, height = 600)
+png("images/stempmin_iterac.png", width = 600, height = 600)
 vis.gam(qgam_model, view = c("Temp_s99", "Temp_s95"), theta = 30, ticktype = "detailed", color = "heat")
 dev.off()
 
