@@ -6,6 +6,7 @@ forecasting including R code, images, data and pre-made predictions.
 ## CODE
 - **part2_code.R** : contains the code relative to the second part of our
 report.
+- **score.R** : contains evaluation functions, such as RMSE and pinball loss.
 
 ## DATA
 - **Data0** : target feature and predictors for training ;
