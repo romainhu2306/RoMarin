@@ -75,7 +75,10 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
                                     Q_init = diag(ncol(input)), method = "em",
                                     n_iter = 1000, verbose = 100)
   ssm_em_pred <- predict(ssm_em, input, target, type = "model",
-                         compute_smooth = TRUE)
+                         compute_smooth = TRUE)$pred_mean
+  train_res <- train$Net_demand - ssm_em_pred[seq_len(nrow_train)]
+  q_norm <- qnorm(q, mean = mean(train_res), sd = sd(train_res))
+  ssm_em_pred[-seq_len(nrow_train)] <- ssm_em_pred[-seq_len(nrow_train)] + q_norm
   ssm_em_pred$pred_mean
 }
 
@@ -99,7 +102,7 @@ write.csv(preds, "qgam_xgb_agg3.csv", row.names = FALSE)
 
 # Train aggregator.
 preds <- read.csv("qgam_xgb_agg2.csv")
-target <- full_data$Net_demand
+target <- data1$Net_demand
 experts <- preds[, -1]
 experts[, 8] <- experts[, 8] - 500
 agg <- mixture(target, experts, model = "MLpol",
@@ -132,16 +135,27 @@ plot(data1$Net_demand, type = "l")
 lines(final_pred, col = "red")
 
 final_res <- data1$Net_demand - final_pred
-plot(final_res, type = "l")
-abline(h = 0, col = "red")
+png("images/residuals.png", width = 600, height = 600)
+plot(data1$Date, final_res, type = "l", xlab = "Time", ylab = "Residuals")
+abline(h = 0, col = "red", lwd = 2)
+dev.off()
 
+png("images/acf.png", width = 600, height = 600)
 acf(final_res)
+dev.off()
 
-hist(final_res, probability = TRUE, breaks = 30, col = "lightblue")
+png("images/hist.png", width = 600, height = 600)
+hist(final_res, probability = TRUE, breaks = 30, col = "lightblue", ylab = "Residuals", main = "")
 lines(density(final_res), col = "red", lwd = 2)
+legend("topleft", legend = "Density", col = "red", lty = 1)
+dev.off()
 
-qqnorm(final_res)
-qqline(final_res, col = "red")
+png("images/qqplot.png", width = 600, height = 600)
+qqnorm(final_res, main = "")
+qqline(final_res, col = "red", lwd = 2)
+dev.off()
+
+shapiro.test(final_res)
 
 final_pred <- read.csv("qgam_xgb_agg2_penalized.csv")[, 2]
 final_pred <- pred
@@ -207,14 +221,26 @@ qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
   s(Solar_power.1, bs = "cr") + s(Net_demand.1, bs = "cr") +
   te(Wind, Wind_weighted) + te(Nebulosity, Nebulosity_weighted) +
-  te(Temp_s99, Temp_s95_min) + te(Temp_s99, Temp_s95)
+  te(Temp_s99, Temp_s95_min) + te(Temp_s99, Temp_s95) + s(Temp_s95, bs = "cr")
 
 qgam_model <- qgam(qgam_eq, data = data0, qu = .8)
 pred_train <- predict(qgam_model)
 pred_test <- predict(qgam_model, data1)
 pinball_loss(data0$Net_demand, pred_train, qu = .8)
 pinball_loss(data1$Net_demand, pred_test, qu = .8)
-
+png("qgam_effects", width = 1200, height = 1200)
+par(mfrow = c(3, 2))
+plot(qgam_model, shade = TRUE, pages = 1)
+plot(qgam_model, select = 2, shade = TRUE, col = "red", ylabel = "Net demand", xlabel = "Time of year")
+plot(qgam_model, select = 3, shade = TRUE, col = "blue", ylabel = "Net demand", xlabel = "Temperature")
+plot(qgam_model, select = 4, shade = TRUE, col = "green", ylabel = "Net demand", xlabel = "Lagged load on Monday")
+plot(qgam_model, select = 5, shade = TRUE, col = "orange", ylabel = "Net demand", xlabel = "Week days")
+plot(qgam_model, select = 12, shade = TRUE, col = "red", ylabel = "Net demand", xlabel = "Bank holidays")
+plot(qgam_model, select = 13, shade = TRUE, col = "red", ylabel = "Net demand", xlabel = "Lagged solar power")
+plot(qgam_model, select = 14, shade = TRUE, col = "red", ylabel = "Net demand", xlabel = "Lagged net demand")
+plot(qgam_model, select = 15, shade = TRUE, col = "red", ylabel = "Wind", xlabel = "Weighted wind")
+plot(qgam_model, select = 15, shade = TRUE, col = "red", ylabel = "Wind", xlabel = "Weighted wind")
+dev.off()
 
 
 
