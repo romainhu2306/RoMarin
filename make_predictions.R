@@ -145,7 +145,7 @@ acf(final_res)
 dev.off()
 
 png("images/hist.png", width = 600, height = 600)
-hist(final_res, probability = TRUE, breaks = 30, col = "lightblue", ylab = "Residuals", main = "")
+hist(final_res, probability = TRUE, breaks = 30, col = "lightblue", xlab = "Residuals", main = "")
 lines(density(final_res), col = "red", lwd = 2)
 legend("topleft", legend = "Density", col = "red", lty = 1)
 dev.off()
