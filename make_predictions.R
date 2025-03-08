@@ -111,7 +111,7 @@ agg_pred <- agg$prediction
 
 y <- full_data$Net_demand
 precedent <- read.csv("qgam_xgb_agg2_penalized.csv")[, 2]
-X <- rbind(agg_pred[sel_a], precedent) %>% scale %>% cbind(1)
+X <- agg_pred %>% scale %>% cbind(1)
 ssm <- statespace(X, y)
 ssm_em <- select_Kalman_variances(ssm, X[sel_a, ], y[sel_a],
                                   method = "em", Q_init <- diag(ncol(X)),
@@ -205,12 +205,15 @@ qgam_eq <- Net_demand ~ s(as.numeric(Date), k = 3, bs = "cr") +
   s(toy, k = 30, bs = "cc") + s(Temp, k = 10, bs = "cr") +
   s(Load.1, bs = "cr", by =  as.factor(WeekDays)) +
   s(Load.7, bs = "cr")  + as.factor(WeekDays) + as.factor(BH) +
-  s(Solar_power.1, bs = "cr") + s(Net_demand.1, bs = "cr")
+  s(Solar_power.1, bs = "cr") + s(Net_demand.1, bs = "cr") +
+  te(Wind, Wind_weighted) + te(Nebulosity, Nebulosity_weighted) +
+  te(Temp_s99, Temp_s95_min) + te(Temp_s99, Temp_s95)
 
 qgam_model <- qgam(qgam_eq, data = data0, qu = .8)
 pred_train <- predict(qgam_model)
 pred_test <- predict(qgam_model, data1)
-
+pinball_loss(data0$Net_demand, pred_train, qu = .8)
+pinball_loss(data1$Net_demand, pred_test, qu = .8)
 
 
 
@@ -227,7 +230,8 @@ qgam_xgb_kf <- function(train, test, qgam_eq, quantile) {
 
   dtrain <- xgb.DMatrix(data = as.matrix(train_xgb[, -c(1, 2, 5, 6, 7)]),
                         label = res)
-  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1, lambda = 0, subsample = .7, colsample_bytree = 1)
+  xgb_params <- list(objective = "reg:squarederror", eta = .1, max_depth = 3, alpha = 1, lambda = 0,
+                     subsample = .7, colsample_bytree = 1, eval_metric = "rmse")
   xgb_model <- xgb.train(params = xgb_params, data = dtrain, nrounds = 1000)
 
   pred1 <- predict(qgam_model, full_data)
@@ -239,7 +243,7 @@ pred <- qgam_xgb_kf(data0, data1, qgam_eq, .8)
 pinball_loss(data1$Net_demand, pred[-sel_a], quant = .8)
 rmse(data1$Net_demand, pred[-sel_a])
 
-q <- 0.8
+q <- 0.2
 myobjective <- function(preds, dtrain) {
   labels <- getinfo(dtrain, "label")
   grad <- (labels < preds)-q
