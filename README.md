@@ -4,7 +4,7 @@ This repository contains our work on french electricity consumption
 forecasting including R code, images, data and pre-made predictions.
 
 ## CODE
-- **part1/2_code.R** : contains the R code relative to the first and second
+- **part1_2_code.R** : contains the R code relative to the first and second
 parts of our repart.
 - **part3_code.R** : contains the R code relative to the third part of our
 report.
@@ -15,8 +15,8 @@ report.
 - **Data1** : predictors for testing.
 
 ## RESULTS
-Contains pre-made predictions of our diverse models. Use these if you prefer
-to avoid running the kalman filters.
+Contains pre-made predictions of our diverse models in part3. Use these if you
+prefer to avoid running the kalman filters.
 
 ## IMAGES
 Contains various plots of qgam effects and interactions, residuals study and
