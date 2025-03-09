@@ -1,0 +1,652 @@
+---
+title: "Modelisation predictive"
+author: "Romain HU - Marine VIEILLARD"
+date: "08/03/2025"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r include=FALSE}
+rm(list=objects())
+setwd("C:/Marine/M1 Maths&IA/S2/Modélisation prédictive")
+set.seed(13)
+```
+
+# Import and data processing
+
+```{r include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(mgcv)
+library(yarrr)
+library(magrittr)
+library(ranger)
+library(opera)
+library(gbm)
+library(caret)
+
+library(randomForest)
+library(xgboost)
+library(neuralnet)
+library(plsmselect)
+library(qgam)
+library("quantreg")
+
+```
+
+## Import Data
+
+```{r}
+source("score.R")
+Data0 <- read_delim("Data/train.csv", delim=",", show_col_types	= FALSE)
+Data1 <- read_delim("Data/test.csv", delim=",", show_col_types	= FALSE)
+```
+
+## Data processing
+
+### Transform Date and WeekDays
+
+```{r}
+Data0$Time <- as.numeric(Data0$Date)
+Data1$Time <- as.numeric(Data1$Date)
+
+Data0$WeekDays <- as.factor(Data0$WeekDays)
+Data1$WeekDays <- as.factor(Data1$WeekDays)
+Data0$WeekDays2 <- weekdays(Data0$Date)
+Data0$WeekDays2 <- forcats::fct_recode(Data0$WeekDays2, 'WorkDay'='jeudi' ,'WorkDay'='mardi', 'WorkDay' = 'mercredi')
+
+```
+
+```{r results='hide'}
+head(Data0)
+summary(Data0)
+```
+
+### Check missing values
+
+```{r results = 'hide'}
+sapply(Data0, function(x) sum(is.na(x)))
+sapply(Data1, function(x) sum(is.na(x)))
+```
+
+### Creation of a validation set
+
+```{r}
+sel_a <- which(Data0$Year<=2021)
+sel_b <- which(Data0$Year>2021)
+```
+
+## Data visualisation
+
+### Trend
+
+```{r results='hide', fig.show="hide"}
+plot(Data0$Date, Data0$Net_demand, type='l', xlab = "Date", ylab = "Consumption")
+lines(Data0$Date[sel_b], Data0$Net_demand[sel_b], col = "red",)
+```
+
+### One year representation
+
+```{r}
+plot(Data0$Date[1:365], Data0$Net_demand[1:365], type='l', xlab = "Date", ylab = "Consumption")
+
+```
+
+```{r results='hide', fig.show="hide"}
+plot(Data0$toy, Data0$Net_demand, pch=16,  col=adjustcolor(col='black', alpha=0.3))
+```
+
+### Days representation
+
+```{r results='hide', fig.show="hide"}
+plot(Data0$Net_demand.1, Data0$Net_demand)
+cor(Data0$Net_demand.1, Data0$Net_demand)
+boxplot(Net_demand~WeekDays, data=Data0)
+boxplot(Net_demand~BH, data=Data0)
+```
+
+### Meteo effect
+
+```{r results='hide', fig.show="hide"}
+plot(Data0$Date, Data0$Net_demand, type='l', xlab='', ylab='')
+par(new=T)
+plot(Data0$Date, Data0$Temp, type='l', col='red', axes=F,xlab='Date',ylab='')
+legend("topright", legend=c("Net Demand","Temp"), col=c("black","red"), lty=1)
+
+plot(Data0$Date[1:365], Data0$Net_demand[1:365], type='l', xlab='Date', ylab='')
+par(new=T)
+plot(Data0$Date[1:365], Data0$Temp[1:365], type='l', col='red', axes=F,xlab='',ylab='')
+legend("topright", legend=c("Net Demand","Temp"), col=c("black","red"), lty=1)
+
+
+plot(Data0$Temp, Data0$Net_demand, pch=3,  col=adjustcolor(col='black', alpha=0.25),xlab='Temperature', ylab='Net_demand')
+```
+
+### Autocorrelation
+
+```{r }
+Acf(Data0$Net_demand, lag.max=7*10, type = c("correlation"), col="blue", ylim=c(0,1))
+Acf(Data0$Net_demand, lag.max=7*60, type = c("correlation"), col="blue", ylim=c(-1,1))
+
+```
+
+# First approach : Linear Model
+
+```{r results = F}
+############################################################
+############### bloc cv
+############################################################
+Nblock<-8
+borne_block<-seq(1, nrow(Data0), length=Nblock+1)%>%floor
+block_list<-list()
+l<-length(borne_block)
+for(i in c(2:(l-1)))
+{
+  block_list[[i-1]] <- c(borne_block[i-1]:(borne_block[i]-1))
+}
+block_list[[l-1]]<-c(borne_block[l-1]:(borne_block[l]))
+
+
+
+fitmod <- function(eq, block) #prend eq modèle et le block , fit sans bloc et predit sur bloc
+{
+  mod <- lm(eq, data=Data0[-block,])
+  mod.cvpred <- predict(mod, newdata=Data0[block,])
+  return(mod.cvpred)
+}
+
+####################################################################
+################ Modèle linéaire
+####################################################################
+Data0$Temp_trunc1 <- pmax(Data0$Temp-286,0) #température - seuil , partie postive 
+Data0$Temp_trunc2 <- pmax(Data0$Temp-290,0)
+
+w<-2*pi/(365)
+Nfourier<-50
+for(i in c(1:Nfourier))
+{
+  assign(paste("cos", i, sep=""),cos(w*Data0$Time*i)) #asign assigner des valeurs à une chaine de caractère
+  assign(paste("sin", i, sep=""),sin(w*Data0$Time*i))
+}
+
+cos<-paste('cos',c(1:Nfourier),sep="",collapse=",")                         
+sin<-paste('sin',c(1:Nfourier),sep="",collapse=",")
+
+Data0<-eval(parse(text=paste("data.frame(Data0,",cos,",",sin,")",sep="")))
+
+
+#fait 30 modèles emboités
+Nfourier<-30
+lm.fourier<-list()
+eq<-list()
+for(i in c(1:Nfourier))
+{
+  cos<-paste(c('cos'),c(1:i),sep="")
+  sin<-paste(c('sin'),c(1:i),sep="")
+  fourier<-paste(c(cos,sin),collapse="+")
+  eq[[i]]<-as.formula(paste("Net_demand~ WeekDays2 + Temp + Temp_trunc1 + Temp_trunc2+",fourier,sep=""))
+  lm.fourier[[i]]<-lm(eq[[i]],data=Data0[sel_a,])
+}
+
+
+
+adj.rsquare<-lapply(lm.fourier,
+                    function(x){summary(x)$adj.r.squared})%>%unlist
+
+fit.rmse<-lapply(lm.fourier,
+                 function(x){rmse(Data0$Net_demand[sel_a],x$fitted)})%>%unlist
+
+forecast.rmse<-lapply(lm.fourier
+                      , function(x){rmse(Data0$Net_demand[sel_b],predict(x,newdata=Data0[sel_b,]))})%>%unlist
+
+fit.mape<-lapply(lm.fourier,
+                 function(x){mape(Data0$Net_demand[sel_a],x$fitted)})%>%unlist
+
+forecast.mape<-lapply(lm.fourier
+                      , function(x){mape(Data0$Net_demand[sel_b],predict(x,newdata=Data0[sel_b,]))})%>%unlist
+
+form <- eq[[10]]
+form <- buildmer::add.terms(form, "Net_demand.1")
+form <- buildmer::add.terms(form, "Net_demand.7")
+```
+
+```{r}
+mod5 <- lm(form, data=Data0[sel_a,])
+mod5.forecast <- predict(mod5, newdata=Data0[sel_b,])
+summary(mod5)
+
+rmse(y=Data0$Net_demand[sel_b], ychap=mod5.forecast) 
+
+mod5.cvpred<-lapply(block_list, fitmod, eq=form)%>%unlist
+rmse(y=Data0$Net_demand, ychap=mod5.cvpred)
+
+res <- Data0$Net_demand - mod5.cvpred
+quant <- qnorm(0.8, mean= mean(res), sd= sd(res))
+pb5 <- pinball_loss(y=Data0$Net_demand[sel_b], mod5.forecast+quant, quant=0.8, output.vect=FALSE)
+pb5 #638
+```
+
+```{r}
+# prediction
+Data1$WeekDays2 <- weekdays(Data1$Date)
+Data1$WeekDays2 <- forcats::fct_recode(Data1$WeekDays2, 'WorkDay'='jeudi' ,'WorkDay'='mardi', 'WorkDay' = 'mercredi')
+
+Data1$Temp_trunc1 <- pmax(Data1$Temp-286,0)
+Data1$Temp_trunc2 <- pmax(Data1$Temp-290,0)
+
+w<-2*pi/(365)
+Nfourier<-50
+for(i in c(1:Nfourier))
+{
+  assign(paste("cos", i, sep=""),cos(w*Data1$Time*i))
+  assign(paste("sin", i, sep=""),sin(w*Data1$Time*i))
+}
+
+cos<-paste('cos',c(1:Nfourier),sep="",collapse=",")                         
+sin<-paste('sin',c(1:Nfourier),sep="",collapse=",")
+
+Data1<-eval(parse(text=paste("data.frame(Data1,",cos,",",sin,")",sep="")))
+
+
+mod5final <- lm(form, data=Data0)
+
+###prev moyenne
+lm.forecast <- predict(mod5final, newdata=Data1)
+###prev proba
+res <- Data0$Net_demand - mod5.cvpred
+quant <- qnorm(0.8, mean= mean(res), sd= sd(res))
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- lm.forecast+quant
+write.table(submit, file="Data/submission_lm5.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 884
+
+# Quantile regression
+
+```{r}
+mod5.rq <- rq(form, data = Data0[sel_a, ], tau=0.7) 
+#summary(mod5.rq)
+
+mod5.rq.forecast <- predict(mod5.rq, newdata=Data0[sel_b,])
+pb_rq2 <- pinball_loss(y=Data0$Net_demand[sel_b], mod5.rq.forecast, quant=0.8, output.vect=FALSE)
+pb_rq2 #555
+
+
+mod5final <- rq(form, data = Data0, tau=0.7)
+mod5final.forecast <- predict(mod5final, newdata=Data1)
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- mod5final.forecast
+write.table(submit, file="Data/submission_rq5bis.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 830
+
+# Ensemble method
+
+```{r}
+mod5 <- lm(form, data=Data0[sel_a,])
+mod5.forecast <- predict(mod5, newdata=Data0[sel_b,])
+#summary(mod5)
+rmse(y=Data0$Net_demand[sel_b], ychap=mod5.forecast)
+
+mod5.cvpred<-lapply(block_list, fitmod, eq=form)%>%unlist
+
+
+fit.ensemble <- function(eq, block)
+{
+  mod <- lm(eq, data=Data0[-block,])
+  mod.forecast <- predict(mod, newdata=Data1)
+  return(mod.forecast)
+}
+
+mod5.ensemble <-lapply(block_list, fit.ensemble, eq=form)
+
+mod5.ensemble <- mod5.ensemble%>%unlist%>%matrix(ncol=length(block_list), nrow=nrow(Data1), byrow=F)
+mod5.ensemble%>%head
+mod5.ensemble <- rowMeans(mod5.ensemble)
+
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- mod5.ensemble
+write.table(submit, file="Data/submission_lm_ensemble_block.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 637
+
+# Random Forest
+
+```{r}
+Nblock <- 8
+borne_block <- seq(1, nrow(Data0), length = Nblock + 1) %>% floor
+block_list <- list()
+l <- length(borne_block)
+for (i in c(2:(l - 1))) {
+  block_list[[i - 1]] <- c(borne_block[i - 1]:(borne_block[i] - 1))
+}
+block_list[[l - 1]] <- c(borne_block[l - 1]:(borne_block[l]))
+
+fitmod_rf <- function(eq, block) {
+  formula <- as.formula(eq)
+  mod <- randomForest(formula, data = Data0[-block,], ntree = 100)
+  mod.cvpred <- predict(mod, newdata = Data0[block,])
+  return(mod.cvpred)
+}
+
+
+mod_rf3 <- randomForest(Net_demand ~ WeekDays2 + Temp + Net_demand.7 + Net_demand.1 + Month + Holiday, data = Data0[sel_a,])
+mod_rf3.forecast <- predict(mod_rf3, newdata = Data0[sel_b,])
+rmse(y = Data0$Net_demand[sel_b], ychap = mod_rf3.forecast)
+
+residuals_rf3 <- Data0$Net_demand[sel_a] - mod_rf3$predicted
+
+plot(Data0$Temp[sel_a], residuals_rf3, pch = 20)
+g0 <- mgcv::gam(residuals_rf3 ~ s(Data0$Temp[sel_a]))
+points(Data0[sel_a,]$Temp, g0$fitted, col = "red")
+
+plot(Data0$Temp[sel_a], Data0$Net_demand[sel_a], pch = 20)
+points(Data0$Temp[sel_a], mod_rf3$predicted, pch = 20, col = "red")
+
+mod_rf3.cvpred <- lapply(block_list, fitmod_rf, eq = "Net_demand ~ WeekDays2 + Temp + Net_demand.7 + Net_demand.1 + Month + Holiday") %>% unlist
+rmse(y = Data0$Net_demand, ychap = mod_rf3.cvpred)
+res <- Data0$Net_demand - mod_rf3.cvpred
+quant <- qnorm(0.8, mean = mean(res), sd = sd(res))
+pb_rf3 <- pinball_loss(y = Data0$Net_demand[sel_b], mod_rf3.forecast + quant, quant = 0.8, output.vect = FALSE)
+pb_rf3 #668
+
+
+modfinal <- randomForest(Net_demand ~ WeekDays2 + Temp + Net_demand.7 + Net_demand.1 + Month + Holiday, data = Data0)
+modf.cvpred <- lapply(block_list, fitmod_rf, eq = "Net_demand ~ WeekDays2 + Temp + Net_demand.7 + Net_demand.1 + Month + Holiday") %>% unlist
+
+modf.forecast <- predict(modfinal, newdata=Data1, type = "response")
+
+res <- Data0$Net_demand - mod_rf3.cvpred
+quant <- qnorm(0.8, mean= mean(res), sd= sd(res))
+
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- modf.forecast+quant
+write.table(submit, file="Data/submission_rf.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 986
+
+# Generalized Additive Model (GAM)
+
+```{r eval=F }
+equation <- Net_demand ~ s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Load.1, bs='cr')+ s(Load.7, bs='cr') +
+  s(Temp_s99,k=10, bs='cr') + WeekDays +BH +
+  s(Wind) + s(Nebulosity)
+
+gam_net4 <- gam(equation,  data=Data0[sel_a,])
+sqrt(gam_net4$gcv.ubre)
+gam_net4.forecast<-predict(gam_net4,  newdata= Data0[sel_b,])
+rmse_net4.forecast <- rmse(Data0[sel_b,]$Net_demand, gam_net4.forecast)
+res <- Data0$Net_demand[sel_b] - gam_net4.forecast
+quant <- qnorm(0.95, mean= mean(res), sd= sd(res))
+pinball_loss(y=Data0$Net_demand[sel_b], gam_net4.forecast+quant, quant=0.95, output.vect=FALSE) #179
+
+mean(Data0[sel_b,]$Net_demand<gam_net4.forecast+quant)
+
+hist(gam_net4$residuals, breaks=50)
+
+gam_net4_sub <- gam(equation,  data=Data0)
+sqrt(gam_net4_sub$gcv.ubre)
+gam_net4_sub.forecast<-predict(gam_net4_sub,  newdata= Data1)
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- gam_net4_sub.forecast
+write.table(submit, file="Data/submission_gam_net4.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 485
+
+# QGAM
+
+```{r}
+equation <- Net_demand ~ s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Load.1, bs='cr')+ s(Load.7, bs='cr') +
+  s(Temp_s99,k=10, bs='cr') + WeekDays +BH +
+  s(Wind) + s(Nebulosity)
+
+qgam_model <- qgam(equation, data=Data0[sel_a,], qu=0.85)
+qgam_forecast <- predict(qgam_model, newdata=Data0[sel_b,])
+pinball_loss(y=Data0$Net_demand[sel_b], qgam_forecast, quant=0.85)
+#291
+
+qgam_net4_sub <- qgam(equation, data=Data0, qu=0.85)
+
+qgam_net4_sub.forecast<-predict(qgam_net4_sub,  newdata= Data1)
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- qgam_net4_sub.forecast
+write.table(submit, file="Data/submission_qgam85.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 750
+
+# GAM with Arima
+
+```{r include=FALSE, results=FALSE}
+blockRMSE<-function(equation, block)
+{
+  g<- gam(as.formula(equation), data=Data0[-block,])
+  forecast<-predict(g, newdata=Data0[block,])
+  return(forecast)
+} 
+
+#equation used for the GAM
+equation <- Net_demand ~ s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Load.1, bs='cr')+ s(Load.7, bs='cr') +
+  s(Temp_s99,k=10, bs='cr') + WeekDays +BH +
+  s(Wind) + s(Nebulosity)
+
+#Data preparation used for this model
+Data0 <- read_delim("Data/train.csv", delim=",")
+Data1<- read_delim("Data/test.csv", delim=",")
+Data0$Time = as.numeric(Data0$Date)
+Data1$Time = as.numeric(Data1$Date)
+Data0$WeekDays <- as.factor(Data0$WeekDays)
+Data1$WeekDays <- as.factor(Data1$WeekDays)
+Data0$WeekDays2 <- weekdays(Data0$Date)
+Data0$WeekDays2 <- forcats::fct_recode(Data0$WeekDays2, 'WorkDay'='jeudi' ,'WorkDay'='mardi', 'WorkDay' = 'mercredi')
+Data1$WeekDays2 <- weekdays(Data1$Date)
+Data1$WeekDays2 <- forcats::fct_recode(Data1$WeekDays2, 'WorkDay'='jeudi' ,'WorkDay'='mardi', 'WorkDay' = 'mercredi')
+
+#block for Cross-Validation
+Nblock = 10
+borne_block = seq(1, nrow(Data0), length=Nblock+1)%>%floor
+block_list = list()
+l = length(borne_block)
+for (i in c(2:(l-1)))
+{
+  block_list[[i-1]] = c(borne_block[i-1]:(borne_block[i]-1))
+}
+block_list[[l-1]] = c(borne_block[l-1]:(borne_block[l]))
+
+gam_model<-gam(equation, data=Data0)
+
+#First prediction for our Data to predict
+gam.forecast.sub<-predict(gam_model,  newdata= Data1)
+
+#Calibrating the arima model using Cross Validation to have unbiaised residuals. Using auto.arima
+Block_forecast<-lapply(block_list, blockRMSE, equation=equation)%>%unlist
+Block_residuals <- Data0$Net_demand-Block_forecast
+Block_residuals.ts <- ts(Block_residuals, frequency=7)
+fit.arima.res <- auto.arima(Block_residuals.ts,max.p=3,max.q=4, max.P=2, max.Q=2, trace=T,ic="aic", method="CSS")
+
+#We then proceed to treat residuals for our prediction
+ts_res_forecast <- ts(c(Block_residuals.ts, Data1$Net_demand.1 - gam.forecast.sub),  frequency= 7)
+refit <- Arima(ts_res_forecast, model=fit.arima.res)
+
+prevARIMA.res <- tail(refit$fitted, nrow(Data1))
+
+#Adding the arima correction to the original prediction
+gam.forecast.sub <- gam.forecast.sub + prevARIMA.res
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- gam.forecast.sub
+write.table(submit, file="Data/submission_gamari2.csv", quote=F, sep=",", dec='.',row.names = F)
+```
+
+Score obtained on Kaggle : 703
+
+# Online GAM model with Arima
+
+```{r include=FALSE ,eval = FALSE}
+blockCV = function(Data)
+{
+  Nblock = 10
+  borne_block = seq(1, nrow(Data), length=Nblock+1)%>%floor
+  block_list = list()
+  l = length(borne_block)
+  for (i in c(2:(l-1)))
+  {
+    block_list[[i-1]] = c(borne_block[i-1]:(borne_block[i]-1))
+  }
+  block_list[[l-1]] = c(borne_block[l-1]:(borne_block[l]))
+  return(block_list)
+}
+
+#equation we will use for all the gam models used
+equation <- Net_demand ~ s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Load.1, bs='cr')+ s(Load.7, bs='cr') +
+  s(Temp_s99,k=10, bs='cr') + WeekDays +BH +
+  s(Wind) + s(Nebulosity)
+
+equation <- Net_demand ~ s(as.numeric(Date),k=3, bs='cr') + s(toy,k=30, bs='cc') + s(Temp,k=10, bs='cr') + s(Net_demand.1, bs='cr')+ s(Net_demand.7, bs='cr') +
+  s(Temp_s99,k=10, bs='cr') + WeekDays +BH +
+  s(Wind) + s(Nebulosity)
+
+
+gam9<-gam(equation, data=Data0)
+
+gam.forecast.sub<-predict(gam_model,  newdata= Data1)
+
+Block_forecast<-predict(gam_model,newdata=Data0)
+Block_residuals <- Data0$Net_demand-Block_forecast
+
+Block_residuals.ts <- ts(Block_residuals, frequency=7)
+
+gam.forecast_update <- gam.forecast.sub
+
+#Data_set that will contain all available data (=past data)
+Past_Data = tibble(Data0)
+
+
+for(i in 1:(nrow(Data1)-1)) {
+  # Création d'une copie de la ligne actuelle
+  line_merged <- Data1[i,]  
+  
+  # Remplacement de Net_demand par Net_demand.1[i+1]
+  line_merged$Net_demand <- Data1$Net_demand.1[i+1]
+  
+  # Ajout à la base de données
+  Past_Data <- bind_rows(Past_Data, line_merged)  # Utilisation de `bind_rows()` pour éviter les problèmes de structure
+  
+  # Réentraîner le modèle avec les nouvelles données
+  gam_model <- gam(equation, data=Past_Data)
+  
+  # Prédire le jour suivant avec GAM
+  intermediate <- predict(gam_model, newdata=Data1[i+1,])
+  
+  # Calcul des résidus sur la nouvelle base de données
+  Block_residuals <- Past_Data$Net_demand - predict(gam_model, newdata=Past_Data)
+  Block_residuals.ts <- ts(Block_residuals, frequency=7)
+  
+  # Ajustement ARIMA
+  fit.arima.res <- auto.arima(Block_residuals.ts, max.p=3, max.q=4, max.P=2, max.Q=2, trace=T, ic="aic", method="CSS")
+  
+  # Correction avec ARIMA
+  ts_res_forecast <- ts(c(Block_residuals.ts, Data1$Load.1[i+1] - intermediate))
+  refit <- Arima(ts_res_forecast, model=fit.arima.res)
+  prevARIMA.res <- tail(refit$fitted, 1)
+  
+  # Mise à jour de la prédiction
+  gam.forecast_update[i+1] <- intermediate + prevARIMA.res
+  
+  print(i)
+}
+
+print(gam.forecast_update)
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- gam.forecast_update
+write.table(submit, file="Data/submission_gamarion1.csv", quote=F, sep=",", dec='.',row.names = F)
+
+```
+
+Score on Kaggle : 479
+
+# Online Random Forest
+
+```{r include = FALSE, eval=FALSE}
+set.seed(13)
+
+equation_forest <- Net_demand ~ WeekDays2 + Temp + Net_demand.7 + Net_demand.1 + Month + Holiday
+
+
+#bloc CV
+Nblock = 10
+borne_block = seq(1, nrow(Data0), length=Nblock+1)%>%floor
+block_list = list()
+l = length(borne_block)
+for (i in c(2:(l-1)))
+{
+  block_list[[i-1]] = c(borne_block[i-1]:(borne_block[i]-1))
+}
+block_list[[l-1]] = c(borne_block[l-1]:(borne_block[l]))
+
+
+rf <- ranger(equation_forest, data=Data0)
+rf.forecast <-  predict(rf, data=Data1)$predictions
+
+rf.forecast_update <- rf.forecast
+Past_Data = tibble(Data0)
+
+
+for(i in c(1: (nrow(Data1)-1))) {
+  # Créer une copie exacte de Data1[i,]
+  line_merged <- Data1[i,]
+  
+  # Remplacer uniquement la valeur de Net_demand
+  line_merged$Net_demand <- Data1$Net_demand.1[i+1]
+  
+  # Ajouter la nouvelle ligne dans Past_Data
+  Past_Data <- bind_rows(Past_Data, line_merged)  # bind_rows() évite les erreurs de structure
+  
+  # Réentraîner le modèle
+  rf <- ranger::ranger(equation_forest, data=Past_Data)
+  
+  # Faire une nouvelle prédiction
+  rf.forecast_update[i+1] <- predict(rf, data=Data1[i+1,], predict.all = F)$predictions
+}
+
+print(rf.forecast_update)
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- rf.forecast_update
+write.table(submit, file="Data/submission_rfon2.csv", quote=F, sep=",", dec='.',row.names = F)
+# 755 sur kaggle (rfon2)
+```
+
+Score on Kaggle : 755
+
+# Boosting
+
+```{r, include=FALSE}
+equation_boosting = Net_demand ~ WeekDays2 + Temp + Net_demand.7 + Net_demand.1 + Month + Holiday 
+
+model_gbm = gbm(formula = equation_boosting,data = Data0,distribution="gaussian",
+                cv.folds = 10,shrinkage=0.01, n.trees = 1500)
+
+pred_y = predict.gbm(model_gbm, Data1)
+
+submit <- read_delim( file="Data/sample_submission.csv", delim=",")
+submit$Net_demand <- pred_y
+write.table(submit, file="Data/submission_boost1.csv", quote=F, sep=",", dec='.',row.names = F)
+# 678  sur kaggle (boost1)
+```
+
+Score on Kaggle : 678
