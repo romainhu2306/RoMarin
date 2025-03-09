@@ -317,7 +317,7 @@ plot(sequence, graph, type = "l", lwd = 2)
 ###############################################################################
 # Example pre-made prediction.
 # Use a prediction on data1 named "final_pred" otherwise.
-final_pred <- read.csv("qgam_xgb_agg2_penalized.csv")[, 2]
+final_pred <- read.csv("results/updated_model.csv")[, 2]
 
 # Evaluation.
 pinball_loss(data1$Net_demand, final_pred, quant = .8,
@@ -327,10 +327,10 @@ rmse(data1$Net_demand, final_pred)
 # Graphical comparison.
 plot(data1$Date, data1$Net_demand,
      type = "l",
-     main = "Comparison of the predictions with the ground truth")
+     main = "Comparison of the predictions with the ground truth",
      xlab = "Time",
-     ylab = "Electricity consumption"
-lines(final_pred,
+     ylab = "Electricity consumption")
+lines(data1$Date, final_pred,
       col = "red")
 legend("topright",
        legend = c("Prediction", "Ground truth"),
