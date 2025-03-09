@@ -1,2 +1,0 @@
-# RoMarin
-Modélisation Prédictive
